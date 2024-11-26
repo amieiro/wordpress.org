@@ -5,10 +5,8 @@ namespace WordPressdotorg\GlotPress\TranslationSuggestions\Routes;
 use GP;
 use GP_Locales;
 use GP_Route;
-use GP_Translation;
 use WordPressdotorg\GlotPress\TranslationSuggestions\Translation_Memory_Client;
 use WP_User;
-use function cli\err;
 use const WordPressdotorg\GlotPress\TranslationSuggestions\PLUGIN_DIR;
 
 class Translation_Memory extends GP_Route {
