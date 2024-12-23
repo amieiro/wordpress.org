@@ -98,7 +98,7 @@ if ( $performed_search && ! $results ) {
 		echo '</div>'; // .notice
 	} else {
 		if ( $is_current_user_gte_for_locale ) {
-			echo '<form action="/consistency" method="post" class="bulk-update-form">';
+			echo '<form action="/consistency/" method="post" class="bulk-update-form">';
 			echo '<input type="hidden" name="nonce" value="' . wp_create_nonce( 'bulk-update-consistency' ) . '">';
 			echo '<input type="hidden" name="set" value="' . esc_translation( $set ) . '">';
 			echo '<input type="hidden" name="search" value="' . esc_html( $search ) . '">';

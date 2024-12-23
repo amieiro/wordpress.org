@@ -25,13 +25,19 @@ class Consistency extends GP_Route {
 	);
 
 	/**
+	 * The Slack channel ID for some Polyglots Logs.
+	 *
+	 * @var string
+	 */
+	private string $polyglots_logs_channel_id = 'C0828HUHGNA';
+
+	/**
 	 * Prints a search form and the search results for a consistency view.
 	 */
 	public function get_search_form( $request = null ) {
 		if ( null == $request ) {
 			$request = $_REQUEST;
 		}
-
 		$consistency_data = $this->prepare_consistency_data( $request );
 		$this->tmpl( 'consistency', $consistency_data );
 	}
@@ -148,7 +154,7 @@ class Consistency extends GP_Route {
 		$new_request['set']                   = $_POST['set'] ?? '';
 		$new_request['search_case_sensitive'] = $_POST['search_case_sensitive'] ?? false;
 		$new_request['project']               = $_POST['project'] ?? '';
-		$matrix_message                       = '';
+		$slack_message                       = '';
 		$updated_translation_count            = 0;
 		$modified_elements                    = array();
 
@@ -220,6 +226,7 @@ class Consistency extends GP_Route {
 				} else {
 					$new_translation = $current_translation;
 				}
+//				$new_translation = $current_translation;
 				$modified_elements[] = array(
 					'exception' => $exception,
 					'old_translation' => $current_translation->translation_0,
@@ -236,10 +243,10 @@ class Consistency extends GP_Route {
 				number_format_i18n( $updated_translation_count )
 			);
 			$new_request['notice_message'] = $notice_message;
-			$matrix_message                = $notice_message;
+			$slack_message                = $notice_message;
 			if ( $modified_elements ) {
 				$new_request['notice_message'] .= '<ul>';
-				$matrix_message                .= "\n\n";
+				$slack_message                .= "\n\n";
 
 				foreach ( $modified_elements as $modified_element ) {
 					$url = sprintf( "https://translate.wordpress.org/projects/%s/%s/?filters[status]=either&filters[original_id]=%d&filters[translation_id]=%d",
@@ -255,8 +262,8 @@ class Consistency extends GP_Route {
 							esc_url( $url ),
 							esc_url( $url )
 						);
-						$matrix_message 			  .= sprintf(
-							"- %s Please, update this translation manually at [%s](%s).\n\n",
+						$slack_message 			  .= sprintf(
+							"- %s. Please, update this translation manually at <%s|%s>.\n\n",
 							esc_html( $modified_element['exception'] ),
 							esc_url( $url ),
 							esc_url( $url )
@@ -264,25 +271,27 @@ class Consistency extends GP_Route {
 						continue;
 					}
 					$new_request['notice_message'] .= sprintf(
-						"<li>Old: \"%s\" → New: \"%s\"\n <ul><li><a href=\"%s\" target=\"_blank\">%s</a></li></ul></li>",
+						"<li>Old: \"%s\" → New: \"%s\"\n <ul><li><a href=\"%s\" target=\"_blank\">%s</a> <span class=\"dashicons dashicons-external\"></span></li></ul></li>",
 						esc_html( $modified_element['old_translation'] ),
 						esc_html( $modified_element['new_translation'] ),
 						esc_url( $url ),
 						esc_url( $url )
 					);
-					$matrix_message 			  .= sprintf(
-						"Old: %s → New: %s\n\n- [%s](%s)\n\n",
+					$slack_message 			  .= sprintf(
+						"- Old: %s → New: %s → <%s|See string>\n",
 						esc_html( $modified_element['old_translation'] ),
 						esc_html( $modified_element['new_translation'] ),
-						esc_url( $url ),
-						esc_url( $url )
+						esc_url_raw( $url )
 					);
 				}
 
 				$new_request['notice_message'] .= '</ul>';
 			}
-			$this->notify_to_matrix( $matrix_message, $current_user, $new_request['set'] );
+			if ( $updated_translation_count > 0 ) {
+				$this->notify_to_slack( $slack_message, $current_user, $new_request['set'] );
+			}
 		}
+
 		$this->get_search_form( $new_request );
 	}
 
@@ -417,10 +426,13 @@ class Consistency extends GP_Route {
 	 *
 	 * @return void
 	 */
-	private function notify_to_matrix( string $message, \WP_User $user, string $set ) {
-		require_once '/home/api/public_html/includes/matrix/poster.php';
-		$matrix_room = 'polyglots-consistency-bulk-updates';
-		$message = "User [{$user->display_name}({$user->user_nicename})](https://profiles.wordpress.org/{$user->user_nicename}) in **{$set}**. " . $message;
-		\DotOrg\Matrix\Poster::force_send( $matrix_room, $message );
+	private function notify_to_slack( string $message, \WP_User $user, string $set ) {
+		$message = "<https://profiles.wordpress.org/{$user->user_nicename}|$user->display_name> has made some bulk updates in *{$set}*. " . $message;
+
+		if ( defined( 'WPORG_SANDBOXED' ) && WPORG_SANDBOXED ) {
+			slack_dm( $message, '@amieiro' );
+		} else {
+			slack_dm( $message, $this->polyglots_logs_channel_id );
+		}
 	}
 }
