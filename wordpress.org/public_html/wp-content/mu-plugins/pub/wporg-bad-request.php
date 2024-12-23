@@ -51,13 +51,16 @@ function check_for_invalid_query_vars( $vars, $ref = '$public_query_vars' ) {
 	$query_vars[] = 'bbp_search';
 	$query_vars[] = 'url';
 	$query_vars[] = 'replytocom';
+	$query_vars[] = 'tag_slug__and'; // Theme Directory has added this as a public query var.
 
 	// Assumption: WP::$public_query_vars will only ever contain non-array query vars.
-	// Assumption invalid. Some fields are valid.
-	$array_fields = [
-		'post_type' => true,
-		'cat' => true,
-		'tag' => true,
+	// Assumption invalid. Some fields are valid as arrays.
+	// We'll limit these to a flat array, not nested.
+	$maybe_array_fields = [
+		'post_type'     => true,
+		'cat'           => true,
+		'tag'           => true,
+		'tag_slug__and' => true,
 	];
 
 	// Some fields only accept numeric values.
@@ -80,20 +83,26 @@ function check_for_invalid_query_vars( $vars, $ref = '$public_query_vars' ) {
 	];
 
 	foreach ( $query_vars as $field ) {
-		if ( isset( $vars[ $field ] ) ) {
-			if ( ! is_scalar( $vars[ $field ] ) && ! isset( $array_fields[ $field ] ) ) {
-				die_bad_request( "non-scalar $field in $ref" );
+		if ( ! isset( $vars[ $field ] ) ) {
+			continue;
+		}
+
+		if ( isset( $maybe_array_fields[ $field ] ) && ! is_scalar( $vars[ $field ] ) ) {
+			if ( array_filter( $vars[ $field ], function( $item ) { return ! is_scalar( $item ); } ) ) {
+				die_bad_request( "non-scalar value in {$field}[] in $ref" );
+			}
+		} else if ( ! is_scalar( $vars[ $field ] ) ) {
+			die_bad_request( "non-scalar $field in $ref" );
+		}
+
+		if ( isset( $must_be_num[ $field ] ) && ! empty( $vars[ $field ] ) && ! is_numeric( $vars[ $field ] ) ) {
+
+			// Allow the `p` variable to contain `p=12345/`: https://bbpress.trac.wordpress.org/ticket/3424
+			if ( 'p' === $field && ( intval( $vars[ $field ] ) . '/' === $vars[ $field ] ) ) {
+				continue;
 			}
 
-			if ( isset( $must_be_num[ $field ] ) && ! empty( $vars[ $field ] ) && ! is_numeric( $vars[ $field ] ) ) {
-
-				// Allow the `p` variable to contain `p=12345/`: https://bbpress.trac.wordpress.org/ticket/3424
-				if ( 'p' === $field && ( intval( $vars[ $field ] ) . '/' === $vars[ $field ] ) ) {
-					continue;
-				}
-
-				die_bad_request( "non-numeric $field in $ref" );
-			}
+			die_bad_request( "non-numeric $field in $ref" );
 		}
 	}
 }
@@ -178,6 +187,43 @@ add_action( 'send_headers', function() {
 		false !== stripos( $combined, 'vulnweb' )
 	) {
 		die_bad_request( "Vulnerability testing spam input to Contact Form." );
+	}
+} );
+
+/**
+ * Detect invalid charsets to trackbacks.
+ * Hotfix for https://core.trac.wordpress.org/ticket/60261
+ */
+add_action( 'template_redirect', function() {
+	if ( ! is_trackback() ) {
+		return;
+	}
+
+	$charset = str_replace( array( ',', ' ' ), '', strtoupper( trim( $_POST['charset'] ?? '' ) ) );
+
+	if ( function_exists( 'mb_list_encodings' ) && ! in_array( $charset, mb_list_encodings(), true ) ) {
+		die_bad_request( 'Invalid Charset' );
+	}
+} );
+
+/**
+ * Detect invalid requests to GlotPress
+ *
+ * Hotfix for https://github.com/GlotPress/GlotPress/pull/1835
+ */
+add_action( 'gp_init', function() {
+	$only_array_values = [ 'filters', 'sort' ];
+
+	foreach ( $only_array_values as $query_var ) {
+		if ( isset( $_GET[ $query_var ] ) && ! is_array( $_GET[ $query_var ] ) ) {
+			if ( empty( $_GET[ $query_var ] ) ) {
+				// If it's not set to anything, just silently discard the value.
+				unset( $_GET[ $query_var ], $_REQUEST[ $query_var ] );
+				continue;
+			}
+
+			die_bad_request( "non-array $query_var in GlotPress" );
+		}
 	}
 } );
 

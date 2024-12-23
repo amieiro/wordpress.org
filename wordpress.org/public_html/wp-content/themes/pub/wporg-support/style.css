@@ -871,7 +871,7 @@ div.bbp-template-notice.updated {
 	background-color: #64b450;
 	color: #fff;
 	position: absolute;
-	padding: 4px 12px 4px 6px;
+	padding: 0 12px 4px 6px;
 	right: -3px;
 	border-top-left-radius: 6px;
 	border-bottom-left-radius: 6px;
@@ -884,7 +884,7 @@ div.bbp-template-notice.updated {
 	font: 400 18px/0.8 dashicons;
 	margin-right: 3px;
 	position: relative;
-	top: 4px;
+	top: 6px;
 }
 
 .topic-resolved-indicator::before {
@@ -935,10 +935,8 @@ div.bbp-template-notice.updated {
 }
 @media screen and (max-width: 480px) {
 	.topic-resolved-indicator {
-		padding-top: 2px;
-		padding-bottom: 2px;
 		top: -2rem;
-		right: -1.7rem;
+		right: -0.7rem;
 	}
 	.topic-resolved-indicator::before {
 		font-size: 19px;
@@ -1340,6 +1338,10 @@ table {
 	border-radius: 0 2px 2px 0;
 }
 
+.bbp-topic-author .author-badge {
+	top: 10px;
+}
+
 .author-badge-moderator {
 	background-color: #33b4ce;
 }
@@ -1422,6 +1424,7 @@ table {
 @media screen and (max-width: 480px) {
 	.author-badge,
 	.author-badge-reporter {
+		left: -20px;
 		top: -28px;
 	}
 }
@@ -1986,7 +1989,7 @@ for a cross of good semantics with the visual */
 /* ----------------------------------------------------------------------------
   5.0 - Responsive Button Styles
 ---------------------------------------------------------------------------- */
-@media screen and (max-width: 48em) {
+@media screen and (max-width: 47.9285714286em) {
 	.button, #bbpress-forums .wporg-bbp-term-subscription > a,
 	#bbpress-forums .reviews-submit-link > .btn,
 	#bbpress-forums .subscription-toggle,
@@ -2843,6 +2846,11 @@ p a:hover {
 	cursor: pointer;
 }
 
+.gutenberg-support #bbpress-forums fieldset.bbp-form .blocks-everywhere {
+	max-width: 100%;
+	min-width: 100%;
+}
+
 /*--------------------------------------------------------------
 # Site
 --------------------------------------------------------------*/
@@ -3199,7 +3207,8 @@ body.home #page .site-main {
 .site-main .search-form .search-field {
 	border: 1px solid #ddd;
 	box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.07);
-	padding: 0.5rem;
+	padding: 0.5rem 2.8rem 0.5rem 0.5rem;
+	text-overflow: ellipsis;
 	width: 100%;
 }
 
@@ -3611,6 +3620,12 @@ section {
 .bbpress #bbpress-forums .bbp-user-replies-created div.bbp-topic-author {
 	padding-left: 1.5rem;
 }
+@media screen and (max-width: 480px) {
+	.bbpress #bbpress-forums .bbp-user-replies-created div.bbp-reply-author,
+	.bbpress #bbpress-forums .bbp-user-replies-created div.bbp-topic-author {
+		padding-left: 0;
+	}
+}
 .bbpress #bbpress-forums .bbp-author-title {
 	margin: 0;
 }
@@ -3734,6 +3749,9 @@ section {
 .bbpress #bbpress-forums p.bbp-topic-meta a:hover, .bbpress #bbpress-forums p.bbp-topic-meta a:focus, .bbpress #bbpress-forums p.bbp-topic-meta a:active {
 	/* Override bb-base/style.css */
 	text-decoration: underline;
+}
+.bbpress #bbpress-forums p.bbp-topic-meta span.bbp-author-name {
+	white-space: normal;
 }
 .bbpress #bbpress-forums p.wporg-bbp-topic-site-url {
 	border-top: 1px solid #eee;
@@ -3915,6 +3933,7 @@ section {
 .bbpress .forum-titles .bbp-topic-voice-count,
 .bbpress .forum-titles .bbp-topic-reply-count {
 	overflow: hidden;
+	white-space: nowrap;
 }
 .bbpress .forum-titles .bbp-topic-voice-count::before,
 .bbpress .forum-titles .bbp-topic-reply-count::before {
@@ -3940,6 +3959,9 @@ section {
 .bbpress li.bbp-header li.bbp-topic-title {
 	text-align: left !important;
 }
+.bbpress li.bbp-topic-title {
+	overflow-wrap: anywhere;
+}
 
 /*--------------------------------------------------------------
 # Buttons
@@ -3948,8 +3970,11 @@ section {
 	padding: 0 0.8rem;
 	font-size: 0.8rem;
 }
+#bbpress-forums .bbp-topic-form,
 #bbpress-forums .bbp-reply-form {
 	clear: both;
+	word-break: break-word;
+	overflow-wrap: break-word;
 }
 #bbpress-forums .bbp-topic-form fieldset.bbp-form button,
 #bbpress-forums .bbp-reply-form fieldset.bbp-form button {
@@ -4027,8 +4052,30 @@ section {
 	font-size: 0.8rem;
 }
 @media (max-width: 767px) {
-	#bbpress-forums input[type=text] {
-		width: 100%;
+	#bbpress-forums #bbp-user-body div.bbp-search-form {
+		float: none;
+	}
+	#bbpress-forums #bbp-user-body div.bbp-search-form form {
+		margin-bottom: 1rem;
+	}
+	#bbpress-forums #bbp-user-body div.bbp-search-form form input[type=text] {
+		width: calc(100% - 75px);
+	}
+	#bbpress-forums #bbp-user-body div.bbp-search-form form input[type=submit] {
+		float: right;
+		height: 100%;
+		padding: 8px 14px;
+	}
+	#bbpress-forums #bbp-user-body h2.entry-title {
+		clear: right;
+	}
+}
+@media (max-width: 480px) {
+	#bbpress-forums #bbp-user-body div.bbp-search-form form input[type=text] {
+		width: calc(100% - 68px);
+	}
+	#bbpress-forums #bbp-user-body div.bbp-search-form form input[type=submit] {
+		padding: 5px 12px;
 	}
 }
 
@@ -4087,7 +4134,7 @@ select {
 .forum-archive.wporg-support .info-box .dashicons,
 .home.wporg-support .info-box .dashicons {
 	font-size: 5.9604644775rem;
-	opacity: 0.4;
+	opacity: 0.55;
 	width: auto;
 	height: auto;
 }
@@ -4257,7 +4304,15 @@ body.single-topic:not(body.topic-edit) .entry-content #bbpress-forums .topic.sti
 }
 @media screen and (max-width: 568px) {
 	body.single-topic:not(body.topic-edit) .entry-content #bbpress-forums .topic.sticky > .topic-indicator, body.single-topic:not(body.topic-edit) .entry-content #bbpress-forums .topic.super-sticky > .topic-indicator, body.single-topic:not(body.topic-edit) .entry-content #bbpress-forums .topic.status-closed > .topic-indicator {
-		left: -16px;
+		top: 10px;
+	}
+	body.single-topic:not(body.topic-edit) .entry-content #bbpress-forums .topic.sticky > .topic-indicator + .bbp-topic-author > .author-badge, body.single-topic:not(body.topic-edit) .entry-content #bbpress-forums .topic.super-sticky > .topic-indicator + .bbp-topic-author > .author-badge, body.single-topic:not(body.topic-edit) .entry-content #bbpress-forums .topic.status-closed > .topic-indicator + .bbp-topic-author > .author-badge {
+		left: 40px;
+	}
+}
+@media screen and (max-width: 480px) {
+	body.single-topic:not(body.topic-edit) .entry-content #bbpress-forums .topic.sticky > .topic-indicator + .bbp-topic-author > .author-badge, body.single-topic:not(body.topic-edit) .entry-content #bbpress-forums .topic.super-sticky > .topic-indicator + .bbp-topic-author > .author-badge, body.single-topic:not(body.topic-edit) .entry-content #bbpress-forums .topic.status-closed > .topic-indicator + .bbp-topic-author > .author-badge {
+		left: 24px;
 	}
 }
 body.single-topic:not(body.topic-edit) .entry-content #bbpress-forums .topic.sticky .dashicons-admin-post, body.single-topic:not(body.topic-edit) .entry-content #bbpress-forums .topic.super-sticky .dashicons-admin-post, body.single-topic:not(body.topic-edit) .entry-content #bbpress-forums .topic.status-closed .dashicons-lock {
@@ -4376,8 +4431,7 @@ div.bbp-breadcrumb p {
 .bbp-view .review-ratings .col-3 {
 	font-size: 0.8rem;
 	margin: 0;
-	width: 35%;
-	float: none;
+	min-width: 40%;
 	border-top: 1px solid #eee;
 }
 .bbp-view .review-ratings .col-3 .reviews-total-count {
@@ -4386,10 +4440,10 @@ div.bbp-breadcrumb p {
 	padding-top: 5px;
 }
 .bbp-view .review-ratings .col-5 {
-	margin: 0 5% 10px 0;
-	width: 60%;
+	margin: 0 0 10px 0;
+	padding-right: 10px;
 	font-size: 0.8rem;
-	float: none;
+	min-width: 54%;
 }
 .bbp-view .review-ratings .col-5 > div:first-child {
 	margin-top: 0;

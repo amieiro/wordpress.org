@@ -281,6 +281,10 @@ class WPORG_Themes_Upload {
 		// The version should be set live as it's from SVN.
 		$this->version_status = 'live';
 
+		if ( 'themedropbox' !== $author && function_exists( 'bump_stats_extra' ) ) {
+			bump_stats_extra( 'themes', 'upload_by_svn' );
+		}
+
 		return $this->import( array( // return true | WP_Error
 			// Since this version is already in SVN, we shouldn't try to import it again.
 			'commit_to_svn' => false,
@@ -446,6 +450,18 @@ class WPORG_Themes_Upload {
 		// Populate the theme post.
 		if ( ! $this->theme_post ) {
 			$this->theme_post = $this->get_theme_post();
+		}
+		$is_new_upload = empty( $this->theme_post );
+		$is_update     = ! $is_new_upload;
+
+		if ( $is_new_upload && defined( 'WPORG_ON_HOLIDAY' ) && WPORG_ON_HOLIDAY ) {
+			return new WP_Error(
+				'submissions_disabled',
+				sprintf(
+					__( 'New theme submissions are currently disabled. Please check back after the <a href="%s">holiday break.</a>', 'wporg-themes' ),
+					'https://wordpress.org/news/2024/12/holiday-break/'
+				)
+			);
 		}
 
 		// Populate author.
@@ -761,6 +777,11 @@ class WPORG_Themes_Upload {
 		// Initiate a GitHub actions run for the theme.
 		$this->trigger_e2e_run();
 
+		// Record stats.
+		if ( function_exists( 'bump_stats_extra' ) ) {
+			bump_stats_extra( 'themes', $is_new_upload ? 'new' : 'update' );
+		}
+
 		// Success!
 		return true;
 	}
@@ -923,6 +944,10 @@ class WPORG_Themes_Upload {
 	 * @return WP_Post|null
 	 */
 	public function get_theme_post() {
+		if ( empty( $this->theme_slug ) ) {
+			return null;
+		}
+
 		$themes = get_posts( array(
 			'name'             => $this->theme_slug,
 			'posts_per_page'   => 1,
@@ -1045,7 +1070,7 @@ class WPORG_Themes_Upload {
 
 		// Display the errors.
 		$verdict = $result ? array( 'tc-pass', __( 'Pass', 'wporg-themes' ) ) : array( 'tc-fail', __( 'Fail', 'wporg-themes' ) );
-		echo '<h4>' . sprintf( __( 'Results of Automated Theme Scanning: %s', 'wporg-themes' ), vsprintf( '<span class="%1$s">%2$s</span>', $verdict ) ) . '</h4>';
+		echo '<h2>' . sprintf( __( 'Results of Automated Theme Scanning: %s', 'wporg-themes' ), vsprintf( '<span class="%1$s">%2$s</span>', $verdict ) ) . '</h2>';
 		echo '<ul class="tc-result">' . display_themechecks() . '</ul>';
 		echo '<div class="notice notice-info"><p>' . __( 'Note: While the automated theme scan is based on the Theme Review Guidelines, it is not a complete review. A successful result from the scan does not guarantee that the theme will pass review. All submitted themes are reviewed manually before approval.', 'wporg-themes' ) . '</p></div>';
 
@@ -1632,7 +1657,7 @@ You can help speed up the process by making sure that your theme follows all of 
 <https://make.wordpress.org/themes/handbook/get-involved/become-a-reviewer/>
 
 ** Questions? **
-If you have questions you can ask the reviewer in the ticket or chat with us on Slack in the #themereview channel.
+If you have questions you can ask the reviewer in the ticket or chat with us on Slack in the #themes channel.
 <https://chat.wordpress.org/>
 
 Subscribe to the Themes Team blog to stay up to date with the latest requirements and the ongoing work to improve the review process:
@@ -1775,7 +1800,7 @@ The WordPress Themes Team', 'wporg-themes' ),
 	}
 
 	/**
-	 * Log a Theme Upload to the slack `#themereview-firehose` channel.
+	 * Log a Theme Upload to the slack `#themes-review-firehose` channel.
 	 * 
 	 * @param string $status Whether the upload was 'allowed' or 'blocked'.
 	 */
@@ -1972,6 +1997,6 @@ The WordPress Themes Team', 'wporg-themes' ),
 			$send->set_icon( ':x:' );
 		}
 
-		$send->send( '#themereview-firehose' );
+		$send->send( '#themes-review-firehose' );
 	}
 }

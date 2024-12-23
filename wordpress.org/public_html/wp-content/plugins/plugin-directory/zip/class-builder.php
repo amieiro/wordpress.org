@@ -28,6 +28,9 @@ class Builder {
 	// The SVN url of the plugin version being packaged.
 	protected $plugin_version_svn_url = '';
 
+	// The revision of the plugin that was just packaged.
+	public $plugins_revision = 0;
+
 	/**
 	 * Generate a ZIP for a provided Plugin tags.
 	 *
@@ -381,6 +384,9 @@ class Builder {
 			throw new Exception( __METHOD__ . ': ' . $res['errors'][0]['error_message'], 404 );
 		}
 
+		// Store the SVN revision that's been used for the ZIP in a property for later.
+		$this->plugins_revision = $res['revision'];
+
 		// Verify that the specified plugin zip will contain files.
 		if ( ! array_diff( scandir( $this->tmp_build_dir ), array( '.', '..' ) ) ) {
 			throw new Exception( ___METHOD__ . ': No files exist in the plugin directory', 404 );
@@ -405,9 +411,12 @@ class Builder {
 	 * from the same source files at different times will have the same checksums.
 	 */
 	protected function fix_directory_dates() {
-		// Find all files, output their modified dates, sort reverse numerically, grab the timestamp from the first entry
+		/*
+		 * Find all files, output their modified dates, sort reverse numerically, grab the timestamp from the first entry
+		 * Note: `sort | head` will generate STDERR output. This is expected and not a cause of concern. Silence it to remove red herrings.
+		 */
 		$latest_file_modified_timestamp = $this->exec( sprintf(
-			"find %s -type f -printf '%%T@\n' | sort -nr | head -c 10",
+			"find %s -type f -printf '%%T@\n' | sort -nr 2>/dev/null | head -c 10",
 			escapeshellarg( $this->tmp_build_dir )
 		) );
 		if ( ! $latest_file_modified_timestamp ) {

@@ -61,7 +61,7 @@ add_filter( 'xmlrpc_methods', '__return_empty_array' );
  * Replace cores login CSS with our own.
  */
 function wporg_login_replace_css() {
-	wp_enqueue_style( 'wporg-login', get_template_directory_uri() . '/stylesheets/login.css', array( 'login', 'dashicons' ), '20230504' );
+	wp_enqueue_style( 'wporg-login', get_template_directory_uri() . '/stylesheets/login.css', array( 'login', 'dashicons' ), filemtime( __DIR__ . '/stylesheets/login.css' ) );
 }
 add_action( 'login_init', 'wporg_login_replace_css' );
 
@@ -410,14 +410,14 @@ add_action( 'admin_init', 'wporg_login_cron_tasks' );
  */
 function wporg_login_purge_pending_registrations() {
 	global $wpdb;
-	$two_weeks_ago_s = time() - 14 * DAY_IN_SECONDS;
-	$two_weeks_ago   = gmdate( 'Y-m-d H:i:s', $two_weeks_ago_s );
+	$timeout_s = time() - 8 * WEEK_IN_SECONDS;
+	$timeout   = gmdate( 'Y-m-d H:i:s', $timeout_s );
 
 	$wpdb->query( $wpdb->prepare(
 		"DELETE FROM `{$wpdb->base_prefix}user_pending_registrations`
 		WHERE `user_registered` <= %s AND LEFT( `user_activation_key`, 10 ) <= %d",
-		$two_weeks_ago,
-		$two_weeks_ago_s
+		$timeout,
+		$timeout_s
 	) );
 }
 add_action( 'login_purge_pending_registrations', 'wporg_login_purge_pending_registrations' );
@@ -473,18 +473,25 @@ function wporg_login_wporg_is_starpress( $redirect_to = '' ) {
 		$from = $_REQUEST['redirect_to'];
 	}
 
-	if ( false !== stripos( $from, 'buddypress.org' ) ) {
-		$message .= '<strong>' . __( 'BuddyPress is part of WordPress.org', 'wporg' ) . '</strong><br>';
+	if ( str_contains( $from, 'buddypress.org' ) ) {
+		$message .= '<strong>' . __( 'BuddyPress is part of WordPress.org', 'wporg' ) . '</strong>';
 		$message .= __( 'Log in to your WordPress.org account to contribute to BuddyPress, or get help in the support forums.', 'wporg' );
 	
-	} elseif ( false !== stripos( $from, 'bbpress.org' ) ) {
-		$message .= '<strong>' . __( 'bbPress is part of WordPress.org', 'wporg' ) . '</strong><br>';
+	} elseif ( str_contains( $from, 'bbpress.org' ) ) {
+		$message .= '<strong>' . __( 'bbPress is part of WordPress.org', 'wporg' ) . '</strong>';
 		$message .= __( 'Log in to your WordPress.org account to contribute to bbPress, or get help in the support forums.', 'wporg' );
-	
-	} elseif ( false !== stripos( $from, 'wordcamp.org' ) ) {
-		$message .= '<strong>' . __( 'WordCamp is part of WordPress.org', 'wporg' ) . '</strong><br>';
-		$message .= __( 'Log in to your WordPress.org account to contribute to WordCamps and meetups around the globe.', 'wporg' );
-	
+	} elseif ( str_contains( $from, 'wordcamp.org' ) || str_contains( $from, 'events.wordpress.org' ) ) {
+		if ( ! empty( $_REQUEST['wcname'] ) ) {
+			$message .= '<strong>' . sprintf( __( 'Register for %s', 'wporg' ), esc_html( $_REQUEST['wcname'] ) ) . '</strong>';
+			$message .=  __( 'Log in to your WordPress.org account. If you don\'t have one, you can <a href="/register">create an account</a>.', 'wporg' );
+		} else {
+			$message .= '<strong>' . __( 'WordCamp is part of WordPress.org', 'wporg' ) . '</strong>';
+			$message .= __( 'Log in to your WordPress.org account to contribute to WordCamps and meetups around the globe.', 'wporg' );
+		}
+	} elseif ( str_contains( $from, 'learn.wordpress.org' ) ) {
+		$message .= '<strong>' . __( 'Access all of Learn WordPress', 'wporg' ) . '</strong>';
+		$message .= __( 'Log in to your WordPress.org account to take or continue a course and track your progress.', 'wporg' );
+
 	} else {
 		$message .= __( 'Log in to your WordPress.org account to contribute to WordPress, get help in the support forum, or rate and review themes and plugins.', 'wporg' );
 	}
@@ -566,7 +573,9 @@ function wporg_remember_where_user_came_from() {
 		return;
 	}
 
-	setcookie( 'wporg_came_from', $came_from, time() + 10*MINUTE_IN_SECONDS, '/', WPOrg_SSO::get_instance()->get_cookie_host(), true, true );
+	setcookie( 'wporg_came_from', $came_from, time() + 30 * MINUTE_IN_SECONDS, '/', WPOrg_SSO::get_instance()->get_cookie_host(), true, true );
+
+	$_COOKIE['wporg_came_from'] = $came_from;
 }
 add_action( 'init', 'wporg_remember_where_user_came_from' );
 

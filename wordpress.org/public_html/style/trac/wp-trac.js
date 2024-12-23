@@ -197,7 +197,7 @@ var wpTrac, coreKeywordList, gardenerKeywordList, reservedTerms, coreFocusesList
 		linkMentions: function( selector ) {
 			// See https://github.com/regexps/mentions-regex/blob/master/index.js#L21
 			var mentionsRegEx = /(^|[^a-zA-Z0-9_＠!@#$%&*])(?:(?:@|＠)(?!\/))([a-zA-Z0-9_\-.]{1,20})(?:\b(?!@|＠)|$)/g,
-				mentionsInAttrRegEx = new RegExp( '="[^"]*?' + mentionsRegEx.source + '[\\s\\S]*?"' );
+				mentionsInAttrRegEx = new RegExp( '="[^"]*?' + mentionsRegEx.source + '[\\s\\S]*?"', 'g' );
 
 			$( selector || 'div.change .comment, #ticket .description' ).each( function() {
 				var $comment = $( this ).html();
@@ -224,7 +224,7 @@ var wpTrac, coreKeywordList, gardenerKeywordList, reservedTerms, coreFocusesList
 
 					// Restore mentions in HTML attributes.
 					if ( placeholders.length ) {
-						$comment = $comment.replace( '__PLACEHOLDER__', function() {
+						$comment = $comment.replace( /__PLACEHOLDER__/g, function() {
 							return placeholders.shift();
 						} );
 					}
@@ -634,7 +634,7 @@ var wpTrac, coreKeywordList, gardenerKeywordList, reservedTerms, coreFocusesList
 					$commit.append( firstLine + '&hellip;' );
 
 					author = $el.find( '.username' ).data( 'username' );
-					$commit.append( ' by <a href="https://profiles.wordpress.org/' + author + '">@' + author + '</a>' );
+					$commit.append( ' by&nbsp;<a href="https://profiles.wordpress.org/' + author + '">@' + author + '</a>' );
 
 					date = $el.find( '.time-ago' ).html();
 					$commit.append( ' ' + date );
@@ -1742,6 +1742,21 @@ var wpTrac, coreKeywordList, gardenerKeywordList, reservedTerms, coreFocusesList
 
 				// Fetch the PRs immediately
 				fetchPRs();
+
+				// deProxy github images, CORS changes.
+				deProxyImages();
+			}
+
+			// See https://meta.trac.wordpress.org/ticket/7442
+			function deProxyImages() {
+				$('img[src*="i0.wp.com/github.com/"]').each( function() {
+					var $this = $(this), $parent = $this.parent('a');
+					$this.removeAttr('crossorigin'); // We trust GitHub for these images.
+					$this.prop( 'src', $this.prop('src').replace(/i0\.wp\.com/, '' ) );
+					$this.prop( 'alt', $this.prop('alt').replace(/i0\.wp\.com/, '' ) );
+					$this.prop( 'title', $this.prop('title').replace(/i0\.wp\.com/, '' ) );
+					$parent.prop( 'href', $parent.prop('href').replace(/i0\.wp\.com/, '' ) );
+				} );
 			}
 
 			function fetchPRs() {
@@ -1942,7 +1957,7 @@ var wpTrac, coreKeywordList, gardenerKeywordList, reservedTerms, coreFocusesList
 							{ href: data.changes.html_url, title: data.title },
 							'#' + data.number + ' ' + data.title
 						) +
-						' by ' +
+						' by&nbsp;' +
 						htmlElement( 'a', { href: data.user.url }, '@' + data.user.name ) +
 					'</div>' +
 					'<div>' +

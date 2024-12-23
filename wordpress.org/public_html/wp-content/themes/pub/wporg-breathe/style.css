@@ -111,6 +111,14 @@ tr:last-of-type td {
 	border-bottom: 0;
 }
 
+.fixed-first-col tr > th:first-child,
+.fixed-first-col tr > td:first-child {
+	position: -webkit-sticky;
+	position: sticky;
+	background-color: white;
+	left: 0;
+}
+
 /* wp4.css overrides */
 p a,
 p a:hover {
@@ -148,6 +156,16 @@ input[type="submit"] {
 	/* Revert styles that should only apply to the content area. */
 	font-size: revert;
 	line-height: revert;
+}
+
+/* Gutenberg overrides */
+
+.wp-block-embed figcaption,
+.wp-block-image figcaption,
+.wp-block-video figcaption {
+	margin: 0.5em 2em 1em;
+	font-style: italic;
+	text-align: center;
 }
 
 /* site */
@@ -291,9 +309,25 @@ input[type="submit"] {
 	font-size: 0.75em;
 }
 
-.wporg-make .site-title a:before,
-body.wporg-make #headline h2 a:before {
-	vertical-align: middle; /* overrides wp4.css */
+/* Adjustments for teams with SVG icons. */
+.wporg-make.make-openverse .site-title a::before,
+.wporg-make.make-performance .site-title a::before {
+	content: '';
+	width: 0;
+}
+.site-title svg {
+	height: 30px;
+	width: 30px;
+	vertical-align: middle;
+}
+
+#secondary-content a {
+	overflow-wrap: anywhere;
+	text-decoration: underline;
+}
+
+#secondary-content .widget_wporg_handbook_pages a {
+	text-decoration: none;
 }
 
 #secondary-content .navigation-main {
@@ -396,8 +430,24 @@ input[type="submit"]:hover {
 	}
 
 	body.responsive-show {
-		overflow-y: visible;
-		position: static;
+		overflow-y: hidden;
+		position: fixed !important;
+		padding-top: var(--wp-admin--admin-bar--height, 0px) !important;
+		top: 0px !important;
+	}
+
+	body.responsive-show #o2-responsive-nav {
+		clear: left;
+		overflow: auto;
+		margin-bottom: 1em;
+	}
+
+	body.responsive-show #secondary-content .navigation-main {
+		margin-top: 0;
+	}
+
+	body.responsive-show .wp-block-group.global-header {
+		z-index: 0;
 	}
 
 	#page {
@@ -519,6 +569,12 @@ input[type="submit"]:hover {
 
 .o2-app-new-post {
 	margin-bottom: 2em;
+}
+
+@media screen and (max-width: 640px) {
+	.make-polyglots .o2-app-new-post {
+		display: block;
+	}
 }
 
 .o2-post {
@@ -703,6 +759,10 @@ article.state-unresolved {
 	right: initial;
 }
 
+nav.o2-post-actions ul li:last-child {
+	line-height: 1;
+}
+
 /*
  * Private post status
  */
@@ -814,6 +874,11 @@ article.type-handbook.status-private .o2-post:after {
 nav.o2-post-footer-actions ul li > a,
 nav.o2-post-footer-actions ul li > span > a {
 	width: inherit;
+}
+
+nav.o2-post-footer-actions div.jetpack-likes-widget-wrapper {
+	height: 39px;
+	padding-top: 7px;
 }
 
 /* make/polyglots post type selector for new posts */
@@ -1142,7 +1207,7 @@ article.page p.contributor-name {
 	color: #aaa;
 	margin-top: 1em;
 	margin-left: 25px;
-	margin-right: 35px;
+	margin-right: 55px;
 	overflow: hidden;
 	letter-spacing: 2px;
 	line-height: 1.1em;
@@ -1620,6 +1685,7 @@ h2.toc-heading + h3.toc-heading:target {
 .post-type-archive-handbook nav.o2-post-actions ul,
 .single-handbook nav.o2-post-actions ul {
 	margin-right: 16.8px;
+	top: 9px;
 }
 
 @media (max-width: 550px) {

@@ -6,6 +6,7 @@ use WordPressdotorg\Plugin_Directory\Plugin_i18n;
 use WordPressdotorg\Plugin_Directory\Template;
 use WordPressdotorg\Plugin_Directory\Tools;
 use WordPressdotorg\Plugin_Directory\API\Base;
+use function WordPressdotorg\Plugin_Directory\Theme\get_plugin_status_notice;
 use WP_REST_Server;
 
 /**
@@ -38,12 +39,34 @@ class Plugin extends Base {
 	 * @return array A formatted array of all the data for the plugin.
 	 */
 	function plugin_info( $request ) {
-		$plugin_slug = $request['plugin_slug'];
-
 		global $post;
-		$post = Plugin_Directory::get_plugin_post( $plugin_slug );
+		$post = Plugin_Directory::get_plugin_post( $request['plugin_slug'] );
 
-		if ( 'publish' != $post->post_status ) {
+		// Support returning API data in different locales, even on wordpress.org (for api.wordpress.org usage)
+		if ( ! empty( $request['locale'] ) && ! in_array( strtolower( $request['locale'] ), array( 'en_us', 'en' ) ) ) {
+			switch_to_locale( $request['locale'] );
+		}
+
+		if ( $post && in_array( $post->post_status, [ 'closed', 'disabled' ] ) ) {
+			$close_data = Template::get_close_data( $post );
+
+			$close_text = '';
+			if ( is_callable( '\WordPressdotorg\Plugin_Directory\Theme\get_plugin_status_notice' ) ) {
+				$close_text = strip_tags( get_plugin_status_notice( $post ) );
+			}
+
+			return [
+				'error'       => 'closed',
+				'name'        => get_the_title(),
+				'slug'        => $post->post_name,
+				'description' => $close_text,
+				'closed'      => true,
+				'closed_date' => $close_data['date'] ? gmdate( 'Y-m-d', strtotime( $close_data['date'] ) ) : false,
+				'reason'      => $close_data['public'] ? $close_data['reason'] : false,
+				'reason_text' => $close_data['public'] ? $close_data['label'] : false,
+			];
+
+		} elseif ( ! $post || 'publish' != $post->post_status ) {
 			// Copy what the REST API does if the param is incorrect
 			return new \WP_Error(
 				'rest_invalid_param',
@@ -57,12 +80,23 @@ class Plugin extends Base {
 			);
 		}
 
-		// Support returning API data in different locales, even on wordpress.org (for api.wordpress.org usage)
-		if ( ! empty( $request['locale'] ) && ! in_array( strtolower( $request['locale'] ), array( 'en_us', 'en' ) ) ) {
-			switch_to_locale( $request['locale'] );
-		}
+		return $this->plugin_info_data( $request, $post );
+	}
 
-		$post_id = $post->ID;
+	/**
+	 * The underlying API for the plugin information.
+	 *
+	 * Expects that the input has been validated, and that the $post object is safe for display.
+	 * This is shared with/called from Pending_Plugin too.
+	 *
+	 * @param \WP_REST_Request $request The request object.
+	 * @param \WP_Post         $post    The post object for the plugin.
+	 * @return array The formatted array of all the data for the plugin.
+	 */
+	public function plugin_info_data( $request, $post ) {
+		$GLOBALS['post'] = $post;
+		$plugin_slug     = $post->post_name;
+		$post_id         = $post->ID;
 
 		$result            = array();
 		$result['name']    = get_the_title();
@@ -130,13 +164,19 @@ class Plugin extends Base {
 		$result['ratings'] = array_map( 'intval', $result['ratings'] );
 		krsort( $result['ratings'] );
 
+		// Determine the last_updated date.
+		$last_updated = $post->last_updated ?: $post->post_modified_gmt; // Prefer the post_meta unless not set.
+		if ( '0000-00-00 00:00:00' === $last_updated ) {
+			$last_updated = $post->post_date_gmt;
+		}
+
 		$result['num_ratings']              = array_sum( $result['ratings'] );
 		$result['support_url']              = 'https://wordpress.org/support/plugin/' . urlencode( $plugin_slug ) . '/';
 		$result['support_threads']          = intval( get_post_meta( $post_id, 'support_threads', true ) );
 		$result['support_threads_resolved'] = intval( get_post_meta( $post_id, 'support_threads_resolved', true ) );
 		$result['active_installs']          = intval( get_post_meta( $post_id, 'active_installs', true ) );
 		$result['downloaded']               = intval( get_post_meta( $post_id, 'downloads', true ) );
-		$result['last_updated']             = gmdate( 'Y-m-d g:ia \G\M\T', strtotime( $post->post_modified_gmt ) );
+		$result['last_updated']             = gmdate( 'Y-m-d g:ia \G\M\T', strtotime( $last_updated ) );
 		$result['added']                    = gmdate( 'Y-m-d', strtotime( $post->post_date_gmt ) );
 		$result['homepage']                 = get_post_meta( $post_id, 'header_plugin_uri', true );
 		$result['sections']                 = array();

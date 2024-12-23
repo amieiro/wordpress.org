@@ -607,6 +607,9 @@ function wporg_themes_approve_version( $post_id, $version, $old_status ) {
 		}
 
 		wp_update_post( $post_args );
+
+		// Subscribe the author to the theme.
+		woprg_themes_subscribe_author_to_theme_forum( get_post( $post_id ) );
 	}
 
 	$content .= sprintf( __( 'Any feedback items are at %s.', 'wporg-themes' ), "https://themes.trac.wordpress.org/ticket/$ticket_id" ) . "\n\n--\n";
@@ -614,6 +617,9 @@ function wporg_themes_approve_version( $post_id, $version, $old_status ) {
 	$content .= 'https://make.wordpress.org/themes';
 
 	wp_mail( get_user_by( 'id', $post->post_author )->user_email, $subject, $content, 'From: "WordPress Theme Directory" <themes@wordpress.org>' );
+
+	// Store some user-meta against the theme author, so that other code knows this is a current (or past) theme author.
+	update_user_meta( $post->post_author, 'has_themes', time() );
 }
 add_action( 'wporg_themes_update_version_live', 'wporg_themes_approve_version', 10, 3 );
 
@@ -845,28 +851,31 @@ function wporg_themes_get_themes_for_query() {
 	}
 
 	$request = array();
-	if ( get_query_var( 'browse' ) ) {
+	if ( get_query_var( 'browse' ) && is_string( get_query_var( 'browse' ) ) ) {
 		$request['browse'] = get_query_var( 'browse' );
 
 		if ( 'favorites' === $request['browse'] ) {
 			$request['user'] = wp_get_current_user()->user_login;
 		}
 
-	} else if ( get_query_var( 'tag' ) ) {
+	} else if ( get_query_var( 'tag' ) && is_string( get_query_var( 'tag' ) ) ) {
 		$request['tag'] = (array) explode( '+', get_query_var( 'tag' ) );
 
-	} else if ( get_query_var( 's' ) ) {
+	} else if ( get_query_var( 's' ) && is_string( get_query_var( 's' ) ) ) {
 		$request['search'] = get_query_var( 's' );
 
 	} else if ( get_query_var( 'author' ) ) {
 		$request['author'] = get_user_by( 'id', get_query_var( 'author' ) )->user_nicename;
 
 	} else if ( get_query_var( 'name' ) || get_query_var( 'pagename' ) ) {
-		$request['theme'] = basename( get_query_var( 'name' ) ?: get_query_var( 'pagename' ) );
+		$name = get_query_var( 'name' ) ?: get_query_var( 'pagename' );
+		if ( is_string( $name ) ) {
+			$request['theme'] = basename( $name );
+		}
 	}
 
 	if ( get_query_var( 'paged' ) ) {
-		$request['page'] = (int)get_query_var( 'paged' );
+		$request['page'] = (int) get_query_var( 'paged' );
 	}
 
 	if ( empty( $request ) ) {
@@ -923,7 +932,7 @@ function wporg_themes_prepare_themes_for_js() {
 
 function wporg_themes_theme_information( $slug ) {
 	return wporg_themes_query_api( 'theme_information', array(
-		'slug' => $slug,
+		'slug'   => $slug,
 		'fields' => array(
 			'description' => true,
 			'sections' => false,
@@ -1496,6 +1505,11 @@ function wporg_themes_canonical_url( $url ) {
 		$url = home_url( '/' );
 	}
 
+	// Pagination.
+	if ( get_query_var( 'paged' ) > 1 ) {
+		$url .= 'page/' . intval( get_query_var( 'paged' ) ) . '/';
+	}
+
 	return $url;
 }
 add_filter( 'wporg_canonical_url', 'wporg_themes_canonical_url' );
@@ -1508,3 +1522,84 @@ function wporg_themes_jetpack_seo_enable( $modules ) {
 	return array_values( array_merge( $modules, array( 'seo-tools' ) ) );
 }
 add_filter( 'jetpack_active_modules', 'wporg_themes_jetpack_seo_enable' );
+
+/**
+ * Subscribe a theme author to their theme support threads upon approval.
+ *
+ * @param WP_Post $post
+ */
+function woprg_themes_subscribe_author_to_theme_forum( $post ) {
+	if ( ! $post || ! defined( 'PLUGIN_API_INTERNAL_BEARER_TOKEN' ) ) {
+		return false;
+	}
+
+	$request = wp_remote_post(
+		'https://wordpress.org/support/wp-json/wporg-support/v1/subscribe-user-to-term',
+		[
+			'body'    => [
+				'type'    => 'theme',
+				'slug'    => $post->post_name,
+				'user_id' => $post->post_author,
+			],
+			'headers' => [
+				'Authorization' => 'Bearer ' . PLUGIN_API_INTERNAL_BEARER_TOKEN,
+			],
+		]
+	);
+
+	return 200 === wp_remote_retrieve_response_code( $request );
+}
+
+/**
+ * Record some stats on theme status changes.
+ *
+ * @param string $new_status
+ * @param string $old_status
+ * @param WP_Post $post
+ */
+function wporg_themes_status_change_stats( $new_status, $old_status, $post ) {
+	if ( 
+		'repopackage' !== $post->post_type ||
+		in_array( $new_status, [ 'draft', 'auto-draft' ] ) ||
+		! function_exists( 'bump_stats_extra' )
+	) {
+		return;
+	}
+
+	if ( 'suspend' == $old_status && 'publish' == $new_status ) {
+		$stat = 'reinstated';
+	} elseif( 'delist' == $old_status && 'publish' == $new_status ) {
+		$stat = 'relisted';
+	} else {
+		$stat = $new_status;
+	}
+ 
+	bump_stats_extra( 'themes', 'status-' . $stat );
+}
+add_action( 'transition_post_status', 'wporg_themes_status_change_stats', 10, 3 );
+
+/**
+ * Check if a user has any themes.
+ *
+ * @param int|WP_User $user_id
+ * @param array       $status  The status of the themes to check for.
+ *
+ * @return bool
+ */
+function wporg_themes_has_theme( $user_id = 0, $status = [ 'publish', 'draft' ] ) {
+	if ( is_object( $user_id ) ) {
+		$user_id = $user_id->ID;
+	} elseif ( ! $user_id ) {
+		$user_id = get_current_user_id();
+	}
+
+	$themes = get_posts( [
+		'post_type'   => 'repopackage',
+		'post_status' => $status,
+		'author'      => $user_id,
+		'numberposts' => 1,
+		'fields'      => 'ids',
+	] );
+
+	return (bool) $themes;
+}

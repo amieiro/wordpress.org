@@ -37,6 +37,10 @@
 	border-radius: 0 2px 2px 0;
 }
 
+.bbp-topic-author .author-badge {
+	top: 10px;
+}
+
 .author-badge-moderator {
 	background-color: $color__moderator;
 }
@@ -101,6 +105,7 @@
 
 	.author-badge,
 	.author-badge-reporter {
+		left: -20px;
 		top: -28px;
 	}
 }

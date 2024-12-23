@@ -27,21 +27,18 @@ if ( is_object( $rosetta ) && $rosetta->showcase instanceof \Rosetta_Showcase ) 
 $swag_class = $showcase ? 'col-4' : 'col-2';
 $user_class = $showcase ? 'col-12' : 'col-2';
 
-$wp20_url = 'https://wp20.wordpress.net/';
-if ( is_object( $rosetta ) && isset( $rosetta->locale ) ) {
-	$wp20_url .= '?locale=' . $rosetta->locale;
-}
-
 // The blocks code sets up the layout, but there is also inline CSS to refine things that aren't supported in classic themes.
-$banner_blocks = '<!-- wp:wporg/link-wrapper {"align":"full","layout":{"type":"constrained"}} -->
-<a class="wp-block-wporg-link-wrapper alignfull" style="background-color:#0a4b78;color:#fff;font-size:16px;" href="' . $wp20_url . '"><!-- wp:group {"layout":{"type":"flex","flexWrap":"nowrap","justifyContent":"center"}} -->
-<div class="wp-block-group" style="padding-top:20px;padding-right:20px;padding-bottom:20px;padding-left:20px;gap:10px;"><!-- wp:image {"width":45,"height":29,"sizeSlug":"full","linkDestination":"none"} -->
-<figure class="wp-block-image size-full is-resized" style="flex-shrink: 0;"><img src="https://wordpress.org/files/2023/05/wp20-logo-white.png" alt="" width="45" height="29" /></figure>
-<!-- /wp:image -->
+$banner_blocks = '<!-- wp:wporg/link-wrapper {"align":"full","style":{"elements":{"link":{"color":{"text":"var:preset|color|charcoal-1"}}},"spacing":{"padding":{"top":"var:preset|spacing|10","bottom":"var:preset|spacing|10","left":"var:preset|spacing|edge-space","right":"var:preset|spacing|edge-space"}},"border":{"style":"solid","width":"1px"}},"borderColor":"white","textColor":"charcoal-1","className":"wporg-homepage-banner","layout":{"type":"constrained"},"fontSize":"small"} -->
+<a class="wp-block-wporg-link-wrapper alignfull wporg-homepage-banner has-border-color has-white-border-color has-charcoal-1-color has-text-color has-link-color has-small-font-size" style="border-style:solid;border-width:1px;padding-top:var(--wp--preset--spacing--10);padding-right:var(--wp--preset--spacing--edge-space);padding-bottom:var(--wp--preset--spacing--10);padding-left:var(--wp--preset--spacing--edge-space)" href="' . __( 'https://wordpress.org/news/2024/05/wordcamp-europe-2024-mid-year-update-and-qa-with-matt-mullenweg/', 'wporg' ) . '"><!-- wp:group {"style":{"spacing":{"blockGap":"8px"}},"layout":{"type":"flex","flexWrap":"nowrap","justifyContent":"center","verticalAlignment":"center"}} -->
+<div class="wp-block-group"><!-- wp:paragraph {"className":"is-style-short-text"} -->
+<p class="is-style-short-text">' . __( 'Matt Mullenweg at WordCamp Europe—streaming live June 15', 'wporg' ) . '</p>
+<!-- /wp:paragraph -->
 
-<!-- wp:paragraph {"style":{"typography":{"lineHeight":"1.1"}}} -->
-<p style="line-height:1.1">' . __( 'Join a celebration online or around the globe for the 20th anniversary of WordPress. ↗', 'wporg' ) . '</p>
-<!-- /wp:paragraph --></div>
+<!-- wp:group {"style":{"typography":{"lineHeight":"1"},"spacing":{"padding":{"top":"3px","bottom":"3px","left":"4px","right":"4px"}}},"layout":{"type":"constrained"}} -->
+<div class="wp-block-group" style="padding-top:3px;padding-right:4px;padding-bottom:3px;padding-left:4px;line-height:1"><!-- wp:image {"id":40598,"width":"24px","height":"24px","scale":"cover","sizeSlug":"full","linkDestination":"none","style":{"layout":{"selfStretch":"fixed","flexSize":"24px"}}} -->
+<figure class="wp-block-image size-full is-resized"><img src="https://wordpress.org/files/2024/06/chevron-right-small.png" alt="" class="wp-image-40598" style="object-fit:cover;width:24px;height:24px"/></figure>
+<!-- /wp:image --></div>
+<!-- /wp:group --></div>
 <!-- /wp:group --></a>
 <!-- /wp:wporg/link-wrapper -->';
 
@@ -54,14 +51,33 @@ get_header( 'wporg' );
 	</aside>
 
 	<style>
-		.wp-block-wporg-link-wrapper {
-			/* This property is used in the focus state, and should match (or at least compliment) the background color. */
-			--wp--preset--color--blueberry-1: #0a4b78;
+		/* Set a few custom properties as they appear in the parent theme. */
+		.wporg-homepage-banner {
+			--wp--preset--spacing--10: 10px;
+			--wp--preset--spacing--edge-space: 80px;
+			--wp--preset--color--charcoal-0: #1a1919;
+			--wp--preset--color--charcoal-1: #1e1e1e;
+			--wp--preset--color--charcoal-2: #23282d;
+			--wp--preset--color--white: #fff;
+			--wp--preset--color--light-grey-1: #d9d9d9;
+			--wp--preset--color--blueberry-1: #3858e9;
+			--wp--preset--color--deep-blueberry: #213fd4;
+			--wp--preset--font-size--small: 14px;
 		}
-		@media (max-width: 499px) {
-			.wp-block-wporg-link-wrapper p {
-				font-size: 13px !important;
-				line-height: 1.2 !important;
+		.has-charcoal-0-background-color {
+			background-color: var(--wp--preset--color--charcoal-0);
+		}
+		.wporg-homepage-banner a:hover {
+			text-decoration: none;
+		}
+		.wporg-homepage-banner > * {
+			margin-left: auto !important;
+			margin-right: auto !important;
+			max-width: 1160px;
+		}
+		@media (max-width: 889px) {
+			.wporg-homepage-banner {
+				--wp--preset--spacing--edge-space: 20px;
 			}
 		}
 	</style>

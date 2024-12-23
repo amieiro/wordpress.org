@@ -13,6 +13,8 @@
 
 namespace WordPressdotorg\Forums;
 
+define( __NAMESPACE__ . '\MODERATION_EMAIL', 'forum-moderation' . '@wordpress.org' );
+
 // This plugin requires that bbPress be activated. Do nothing if activated without it.
 if ( ! class_exists( 'bbPress' ) ) {
 	return;
@@ -30,6 +32,7 @@ include( __DIR__ . '/inc/class-stats.php' );
 include( __DIR__ . '/inc/class-emails.php' );
 include( __DIR__ . '/inc/class-audit-log.php' );
 include( __DIR__ . '/inc/class-blocks.php' );
+include( __DIR__ . '/inc/class-rest-api.php' );
 
 // Compat-only includes.
 include( __DIR__ . '/inc/class-dropin.php' );

@@ -22,6 +22,17 @@ class Locale_Banner extends Base {
 			),
 			'permission_callback' => '__return_true',
 		) );
+
+		register_rest_route( 'plugins/v2', '/locale-banner', array(
+			'methods'             => WP_REST_Server::ALLMETHODS,
+			'callback'            => array( $this, 'locale_banner_text' ),
+			'args'                => array(
+				'plugin_slug' => array(
+					'validate_callback' => array( $this, 'validate_plugin_slug_callback' ),
+				),
+			),
+			'permission_callback' => '__return_true',
+		) );
 	}
 
 	/**
@@ -190,6 +201,27 @@ class Locale_Banner extends Base {
 	}
 
 	/**
+	 * Endpoint to return a result that matches what is expected by the wporg/language-suggest block.
+	 *
+	 * @param \WP_REST_Request $request The Rest API Request.
+	 */
+	public function locale_banner_text( $request ) {
+		// The result should be a raw html response.
+		add_filter( 'rest_pre_echo_response', function( $result ) {
+
+			header( 'Content-Type: text/plain' );
+			if ( ! empty( $result['suggest_string'] ) ) {
+				echo '<p>' . $result['suggest_string'] . '</p>';
+			}
+
+			return null;
+		} );
+
+		// Run the v1 api.
+		return $this->locale_banner( $request );
+	}
+
+	/**
 	 * Get locales matching the HTTP accept language header.
 	 *
 	 * @param array $available_locales List of available locales.
@@ -210,9 +242,10 @@ class Locale_Banner extends Base {
 
 		if ( is_array( $http_locales ) ) {
 			foreach ( $http_locales as $http_locale ) {
-				@list( $lang, $region ) = explode( '-', $http_locale );
-				if ( is_null( $region ) ) {
-					$region = $lang;
+				$lang   = $http_locale;
+				$region = $http_locale;
+				if ( str_contains( $http_locale, '-' ) ) {
+					list( $lang, $region ) = explode( '-', $http_locale );
 				}
 
 				/*

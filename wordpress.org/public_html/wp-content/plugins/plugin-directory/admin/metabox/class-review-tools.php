@@ -114,7 +114,11 @@ class Review_Tools {
 
 		$zip_files = array();
 		foreach ( get_attached_media( 'application/zip', $post ) as $zip_file ) {
-			$zip_files[ $zip_file->post_date ] = array( wp_get_attachment_url( $zip_file->ID ), $zip_file );
+			$zip_files[ $zip_file->post_date ] = array(
+				wp_get_attachment_url( $zip_file->ID ),
+				$zip_file,
+				get_attached_file( $zip_file->ID )
+			);
 		}
 
 		if ( $zip_files ) {
@@ -125,21 +129,26 @@ class Review_Tools {
 			echo '<p><strong>Zip files:</strong></p>';
 			echo '<ul class="plugin-zip-files">';
 			foreach ( $zip_files as $zip_date => $zip ) {
-				list( $zip_url, $zip_file ) = $zip;
-				$zip_size                   = size_format( filesize( get_attached_file( $zip_file->ID ) ), 1 );
-				$zip_preview                = Template::preview_link_zip( $slug, $zip_file->ID );
-				$zip_pcp                    = Template::preview_link_zip( $slug, $zip_file->ID, 'pcp' );
+				list( $zip_url, $zip_file, $file_on_disk ) = $zip;
+
+				if ( ! file_exists( $file_on_disk ) ) {
+					continue;
+				}
+
+				$zip_size    = size_format( filesize( $file_on_disk ), 1 );
+				$zip_preview = Template::preview_link_zip( $slug, $zip_file->ID );
+				$zip_pcp     = Template::preview_link_zip( $slug, $zip_file->ID, 'pcp' );
 
 				printf(
 					'<li>%1$s v%2$s <a href="%3$s" title="%4$s">%5$s</a> (%6$s) (<a href="%7$s" target="_blank">preview</a> | <a href="%8$s" target="_blank">pcp</a>)</li>',
 					esc_html( $zip_date ),
 					esc_html( $zip_file->version ),
 					esc_url( $zip_url ),
-					esc_attr( $zip_file->post_title ),
+					esc_attr( trim( $zip_file->post_title . ' ' . $zip_file->post_content ) ),
 					esc_html( $zip_file->submitted_name ),
 					esc_html( $zip_size ),
 					esc_url( $zip_preview ),
-					esc_url( $zip_pcp )
+					esc_url( $zip_pcp ),
 				);
 			}
 			echo '</ul>';
@@ -295,7 +304,43 @@ class Review_Tools {
 					<li><a href='https://plugins.svn.wordpress.org/<?php echo esc_attr( $post->post_name ); ?>/'>Subversion Repository</a></li>
 					<li><a href='https://plugins.trac.wordpress.org/browser/<?php echo esc_attr( $post->post_name ); ?>/'>Browse in Trac</a></li>
 					<li><a href='<?php echo esc_url( Template::download_link() ); ?>'>Download Current Version</a></li>
-					<li><a href='<?php echo esc_url( 'https://playground.wordpress.net/?plugin=' . $post->post_name ); ?>'>Run in playground</a></li>
+
+					<?php
+					// PCP Blueprint.
+					$pcp_blueprint = [
+						'landingPage'         => '/wp-admin/admin.php?page=plugin-check',
+						'phpExtensionBundles' => [
+							'kitchen-sink'
+						],
+						'steps'               => [
+							[
+								'step'     => 'login',
+								'username' => 'admin',
+								'password' => 'password',
+							],
+							[
+								'step'          => 'installPlugin',
+								'options'       => [
+									'activate' => false,
+								],
+								'pluginZipFile' => [
+									'resource' => 'wordpress.org/plugins',
+									'slug'     => $post->post_name,
+								],
+							],
+							[
+								'step'          => 'installPlugin',
+								'pluginZipFile' => [
+									'resource' => 'wordpress.org/plugins',
+									'slug'     => 'plugin-check',
+								],
+							],
+						]
+					];
+					// NOTE: Must be escaped with `esc_attr()` not `esc_url()` as the blueprint is not encoded.
+					$playground_with_pcp = 'https://playground.wordpress.net/#' . json_encode( $pcp_blueprint, JSON_UNESCAPED_SLASHES );
+					?>
+					<li><a href='<?php echo esc_url( 'https://playground.wordpress.net/?plugin=' . $post->post_name ); ?>' target='_blank'>Run in playground</a> (<a href='<?php echo esc_attr( $playground_with_pcp ); ?>' target='_blank'>PCP</a>)</li>
 
 					<?php if ( has_term( 'block', 'plugin_section', $post ) ) : ?>
 						<li><a href='https://wordpress.org/plugins/developers/block-plugin-validator/?plugin_url=<?php echo esc_attr( $post->post_name ); ?>'>Block Plugin Checker</a></li>

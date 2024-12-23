@@ -46,10 +46,14 @@ class Plugin_Directory {
 		add_action( 'template_redirect', array( $this, 'geopattern_icon_route' ), 0 );
 		add_filter( 'query_vars', array( $this, 'filter_query_vars' ), 1 );
 		add_filter( 'single_term_title', array( $this, 'filter_single_term_title' ) );
+		add_filter( 'get_the_archive_title_prefix', array( $this, 'filter_get_the_archive_title_prefix' ) );
 		add_filter( 'the_content', array( $this, 'filter_rel_nofollow_ugc' ) );
 		add_action( 'wp_head', array( Template::class, 'json_ld_schema' ), 1 );
 		add_action( 'wp_head', array( Template::class, 'hreflang_link_attributes' ), 2 );
 		add_filter( 'allowed_redirect_hosts', array( $this, 'filter_redirect_hosts' ) );
+		add_filter( 'wp_get_attachment_url', array( $this, 'add_info_to_zip_url' ), 100, 2 );
+
+		add_filter( 'wp_resource_hints', array( $this, 'wp_resource_hints' ), 10, 2 );
 
 		// Add no-index headers where appropriate.
 		add_filter( 'wporg_noindex_request', [ Template::class, 'should_noindex_request' ] );
@@ -78,7 +82,7 @@ class Plugin_Directory {
 		// Load the API routes.
 		add_action( 'rest_api_init', array( __NAMESPACE__ . '\API\Base', 'init' ) );
 
-		// Allow post_modified not to be modified when we don't specifically bump it.
+		// Allow post_modified not to be modified when we don't specifically bump it, and slugs for pending plugins.
 		add_filter( 'wp_insert_post_data', array( $this, 'filter_wp_insert_post_data' ), 10, 2 );
 
 		add_filter( 'jetpack_active_modules', function( $modules ) {
@@ -118,8 +122,9 @@ class Plugin_Directory {
 
 	/**
 	 * Filters `wp_insert_post()` to respect the presented data.
+	 *
 	 * This function overrides `wp_insert_post()`s constant updating of
-	 * the post_modified fields.
+	 * the post_modified fields, and allows for pending posts to have a slug.
 	 *
 	 * @param array $data    The data to be inserted into the database.
 	 * @param array $postarr The raw data passed to `wp_insert_post()`.
@@ -127,10 +132,35 @@ class Plugin_Directory {
 	 * @return array The data to insert into the database.
 	 */
 	public function filter_wp_insert_post_data( $data, $postarr ) {
-		if ( 'plugin' === $postarr['post_type'] ) {
-			$data['post_modified']     = $postarr['post_modified'];
-			$data['post_modified_gmt'] = $postarr['post_modified_gmt'];
+		if ( 'plugin' !== $postarr['post_type'] ) {
+			return $data;
 		}
+
+		// Allow setting post_modified fields.
+		$data['post_modified']     = $postarr['post_modified'];
+		$data['post_modified_gmt'] = $postarr['post_modified_gmt'];
+
+		/*
+		 * wp_insert_post() does not allow `pending` posts to have a slug, unless the user can publish it.
+		 *
+		 * Inherit the previous slug, never allowing it to go to empty for this case.
+		 *
+		 * There's an edgecase here, where we might be inserting a post as pending for the first time,
+		 * in that case we just do our best to respect the data provided..
+		 */
+		if (
+			'pending' === $data['post_status'] &&
+			empty( $data['post_name'] )
+		) {
+			if ( ! empty( $postarr['ID'] ) ) {
+				// Updating an existing post.
+				$data['post_name'] = get_post_field( 'post_name', $postarr['ID'] );
+			} else {
+				// New insert, we'll just hope that it was specified.
+				$data['post_name'] = $postarr['post_name'] ?? '';
+			}
+		}
+
 		return $data;
 	}
 
@@ -196,32 +226,6 @@ class Plugin_Directory {
 			),
 		) );
 
-		register_taxonomy( 'plugin_category', 'plugin', array(
-			'hierarchical'      => true, /* for tax_input[] handling on post saves. */
-			'query_var'         => 'plugin_category',
-			'rewrite'           => array(
-				'hierarchical' => false,
-				'slug'         => 'category',
-				'with_front'   => false,
-				'ep_mask'      => EP_TAGS,
-			),
-			'labels'            => array(
-				'name'          => __( 'Plugin Categories', 'wporg-plugins' ),
-				'singular_name' => __( 'Plugin Category', 'wporg-plugins' ),
-				'edit_item'     => __( 'Edit Category', 'wporg-plugins' ),
-				'update_item'   => __( 'Update Category', 'wporg-plugins' ),
-				'add_new_item'  => __( 'Add New Category', 'wporg-plugins' ),
-				'new_item_name' => __( 'New Category Name', 'wporg-plugins' ),
-				'search_items'  => __( 'Search Categories', 'wporg-plugins' ),
-			),
-			'public'            => true,
-			'show_ui'           => true,
-			'show_admin_column' => false,
-			'capabilities'      => array(
-				'assign_terms' => 'plugin_set_category',
-			),
-		) );
-
 		/*
 		 * Register before other taxonomies.
 		 * This ensures that it'll be returned by get_queried_object() in a multi-tax query.
@@ -250,6 +254,32 @@ class Plugin_Directory {
 			'meta_box_cb'       => false,
 			'capabilities'      => array(
 				'assign_terms' => 'do_not_allow',
+			),
+		) );
+
+		register_taxonomy( 'plugin_category', 'plugin', array(
+			'hierarchical'      => true, /* for tax_input[] handling on post saves. */
+			'query_var'         => 'plugin_category',
+			'rewrite'           => array(
+				'hierarchical' => false,
+				'slug'         => 'category',
+				'with_front'   => false,
+				'ep_mask'      => EP_TAGS,
+			),
+			'labels'            => array(
+				'name'          => __( 'Plugin Categories', 'wporg-plugins' ),
+				'singular_name' => __( 'Plugin Category', 'wporg-plugins' ),
+				'edit_item'     => __( 'Edit Category', 'wporg-plugins' ),
+				'update_item'   => __( 'Update Category', 'wporg-plugins' ),
+				'add_new_item'  => __( 'Add New Category', 'wporg-plugins' ),
+				'new_item_name' => __( 'New Category Name', 'wporg-plugins' ),
+				'search_items'  => __( 'Search Categories', 'wporg-plugins' ),
+			),
+			'public'            => true,
+			'show_ui'           => true,
+			'show_admin_column' => false,
+			'capabilities'      => array(
+				'assign_terms' => 'plugin_set_category',
 			),
 		) );
 
@@ -519,7 +549,7 @@ class Plugin_Directory {
 		) );
 
 		// Add the browse/* views.
-		add_rewrite_tag( '%browse%', '(featured|popular|beta|blocks|block|new|favorites|adopt-me|updated)' );
+		add_rewrite_tag( '%browse%', '(featured|popular|beta|blocks|block|new|favorites|adopt-me|updated|preview)' );
 		add_permastruct( 'browse', 'browse/%browse%' );
 
 		// Create an archive for a users favorites too.
@@ -653,7 +683,7 @@ class Plugin_Directory {
 		 * @var \WP_Theme $theme
 		 */
 		foreach ( wp_get_themes() as $theme ) {
-			if ( $theme->get( 'Name' ) === 'WordPress.org Plugins' ) {
+			if ( $theme->get( 'Name' ) === 'WordPress.org Plugins 2024' ) {
 				switch_theme( $theme->get_stylesheet() );
 				break;
 			}
@@ -753,6 +783,20 @@ class Plugin_Directory {
 		if ( empty( $wp_query->query_vars['pagename'] ) && ( empty( $wp_query->query_vars['post_type'] ) || 'post' == $wp_query->query_vars['post_type'] ) ) {
 			$wp_query->query_vars['post_type']   = array( 'plugin' );
 			$wp_query->query_vars['post_status'] = array( 'publish' );
+
+			// Support queries for `?p=...` for pages, as it's used as the shortlink.
+			if ( ! empty( $wp_query->query_vars['p'] ) ) {
+				$wp_query->query_vars['post_type'][] = 'page';
+			}
+		}
+
+		// If it's a query explicitely for non-plugin-related content, bail.
+		if (
+			! empty( $wp_query->query_vars['post_type'] ) &&
+			'plugin' !== $wp_query->query_vars['post_type'] &&
+			! in_array( 'plugin', (array) $wp_query->query_vars['post_type'], true )
+		) {
+			return;
 		}
 
 		// By default, if no query is made, we're querying /browse/featured/
@@ -761,18 +805,18 @@ class Plugin_Directory {
 		}
 
 		// For any invalid values passed to browse, set it to featured instead
-		if ( !empty ( $wp_query->query ['browse'] ) &&
-		     !in_array( $wp_query->query['browse'], array( 'featured', 'popular', 'beta', 'blocks', 'block', 'new', 'favorites', 'adopt-me', 'updated' ) ) ) {
-			 $wp_query->query['browse'] = 'featured';
+		if (
+			! empty ( $wp_query->query['browse'] ) &&
+			! in_array( $wp_query->query['browse'], array( 'featured', 'popular', 'beta', 'blocks', 'block', 'new', 'favorites', 'adopt-me', 'updated', 'preview' ) )
+		) {
+			 $wp_query->query['browse']      = 'featured';
 			 $wp_query->query_vars['browse'] = 'featured';
 		}
 
 		// Set up custom queries for the /browse/ URLs
 		switch ( $wp_query->get( 'browse' ) ) {
 			case 'beta':
-				$wp_query->query_vars['meta_key'] = 'last_updated';
-				$wp_query->query_vars['orderby']  = 'meta_value';
-				$wp_query->query_vars['order']    = 'DESC';
+				$wp_query->query_vars['orderby'] ??= 'last_updated';
 
 				// Limit the Beta tab to plugins updated within 12 months.
 				$meta_query                = $wp_query->get( 'meta_query' ) ?: [];
@@ -780,6 +824,20 @@ class Plugin_Directory {
 					'key'     => 'last_updated',
 					'value'   => gmdate( 'Y-m-d H:i:s', time() - YEAR_IN_SECONDS ),
 					'compare' => '>',
+				];
+				$wp_query->set( 'meta_query', $meta_query );
+
+				break;
+
+			case 'preview':
+				$wp_query->query_vars['orderby'] ??= 'last_updated';
+
+				// Limit the Beta tab to plugins updated within 12 months.
+				$meta_query                = $wp_query->get( 'meta_query' ) ?: [];
+				$meta_query['live-preview'] = [
+					'key'     => '_public_preview',
+					'value'   => '1',
+					'compare' => '=',
 				];
 				$wp_query->set( 'meta_query', $meta_query );
 
@@ -801,8 +859,8 @@ class Plugin_Directory {
 					$wp_query->query_vars['favorites_user'] = $favorites_user->user_nicename;
 					$wp_query->query_vars['post_name__in']  = get_user_meta( $favorites_user->ID, 'plugin_favorites', true );
 
-					$wp_query->query_vars['orderby'] = 'post_title';
-					$wp_query->query_vars['order']   = 'ASC';
+					$wp_query->query_vars['orderby'] ??= 'post_title';
+					$wp_query->query_vars['order']   ??= 'ASC';
 				}
 
 				if ( ! $favorites_user || ! $wp_query->query_vars['post_name__in'] ) {
@@ -811,12 +869,12 @@ class Plugin_Directory {
 				break;
 
 			case 'updated':
-				$wp_query->query_vars['orderby'] = 'post_modified';
+				$wp_query->query_vars['orderby'] ??= 'last_updated';
 				break;
 
 			case 'block':
 			case 'new':
-				$wp_query->query_vars['orderby'] = 'post_date';
+				$wp_query->query_vars['orderby'] ??= 'post_date';
 				break;
 		}
 
@@ -873,8 +931,8 @@ class Plugin_Directory {
 				);
 			}
 
-			$wp_query->query_vars['orderby'] = 'post_title';
-			$wp_query->query_vars['order']   = 'ASC';
+			$wp_query->query_vars['orderby'] ??= 'post_title';
+			$wp_query->query_vars['order']   ??= 'ASC';
 
 			// Treat it as a taxonomy query now, not the author archive.
 			$wp_query->is_author = false;
@@ -925,7 +983,7 @@ class Plugin_Directory {
 
 		// Sanitize / cleanup the search query a little bit.
 		if ( $wp_query->is_search() ) {
-			$s = $wp_query->get( 's' );
+			$s = wp_unslash( $wp_query->get( 's' ) );
 			$s = urldecode( $s );
 
 			// If a URL-like request comes in, reduce to a slug
@@ -938,18 +996,119 @@ class Plugin_Directory {
 				$s = mb_substr( $s, 0, 200 );
 			}
 
-			// Trim off special characters, only allowing wordy characters at the end of searches.
-			$s = preg_replace( '!(\W+)$!iu', '', $s );
-			// ..and whitespace
+			// Trim whitespace
 			$s = trim( $s );
 
-			$wp_query->set( 's', $s );
+			// If we're searching for a phrase, only trim non-quotey+wordy characters.
+			if ( str_starts_with( $s, '"' ) || str_starts_with( $s, "'" ) ) {
+				$s = preg_replace( '!(\s*[^\'"\w]+)$!iu', '', $s );
+			} else {
+				// If we're searching for a word, trim all non-wordy characters.
+				$s = preg_replace( '!(\s*\W+)$!iu', '', $s );
+			}
+
+			$wp_query->set( 's', wp_slash( $s ) );
+
+			// If the search is in the block directory, require that.
+			if ( $wp_query->get( 'block_search' ) ) {
+				$wp_query->query_vars['tax_query']['plugin_section'][] = array(
+					'taxonomy' => 'plugin_section',
+					'field'    => 'slug',
+					'terms'    => 'block',
+				);
+			}
 		}
 
 		// By default, all archives are sorted by active installs
-		if ( $wp_query->is_archive() && empty( $wp_query->query_vars['orderby'] ) ) {
-			$wp_query->query_vars['orderby']  = 'meta_value_num';
-			$wp_query->query_vars['meta_key'] = '_active_installs';
+		if ( $wp_query->is_archive() && ! $wp_query->is_search() && empty( $wp_query->query_vars['orderby'] ) ) {
+			$wp_query->query_vars['orderby']  = 'active_installs';
+		}
+
+		// Adjust the rules for other sorts.
+		// Support orderby={orderby}_{order}
+		if ( isset( $wp_query->query_vars['orderby'] ) && is_string( $wp_query->query_vars['orderby'] ) ) {
+			$orderby = $wp_query->query_vars['orderby'];
+			if ( str_ends_with( $orderby, '_desc' ) ) {
+				$wp_query->query_vars['order']   = 'DESC';
+				$wp_query->query_vars['orderby'] = substr( $orderby, 0, -5 );
+			} elseif ( str_ends_with( $orderby, '_asc' ) ) {
+				$wp_query->query_vars['order']   = 'ASC';
+				$wp_query->query_vars['orderby'] = substr( $orderby, 0, -4 );
+			}
+		}
+
+		// The custom sorts.
+		$orderby = $wp_query->query_vars['orderby'] ?? '';
+		$order   = $wp_query->query_vars['order'] ?? 'DESC';
+		switch( $orderby ) {
+			case 'rating':
+				// TODO: Round out the rating to be based on half-stars. A 4.95 rating vs a 5.00 appears the same, but sorts differently.
+				$wp_query->query_vars['meta_query']['rating'] ??= [
+					'key'     => 'rating',
+					'type'    => 'DECIMAL(3,2)',
+					'compare' => 'EXISTS',
+				];
+				$wp_query->query_vars['meta_query']['num_ratings'] ??= [
+					'key'     => 'num_ratings',
+					'type'    => 'UNSIGNED',
+					'compare' => '>',
+					'value'   => 0,
+				];
+
+				// Should be a multisort, with an additional `num_ratings`.
+				$wp_query->query_vars['orderby']  = array(
+					'rating'      => $order,
+					'num_ratings' => $order,
+				);
+
+				break;
+
+			case 'ratings':
+				$wp_query->query_vars['orderby'] = 'num_ratings';
+				// Fall through.
+			case 'num_ratings':
+				$wp_query->query_vars['meta_query']['num_ratings'] ??= [
+					'key'     => 'num_ratings',
+					'type'    => 'UNSIGNED',
+					'compare' => '>',
+					'value'   => 0,
+				];
+				break;
+
+			case '_active_installs':
+				$wp_query->query_vars['orderby']  = 'active_installs';
+				// Fall through.
+			case 'active_installs':
+				$wp_query->query_vars['meta_query']['active_installs'] ??= [
+					'key'     => '_active_installs',
+					'type'    => 'UNSIGNED',
+					'compare' => 'EXISTS'
+				];
+				break;
+
+			case 'last_updated':
+				$wp_query->query_vars['meta_query']['last_updated'] ??= [
+					'key'     => 'last_updated',
+					'type'    => 'DATETIME',
+					'compare' => 'EXISTS',
+				];
+				break;
+
+			case 'tested':
+				$wp_query->query_vars['meta_query']['tested'] ??= [
+					'key'     => 'tested',
+					'type'    => 'DECIMAL(2,1)',
+					'compare' => 'EXISTS',
+				];
+				break;
+
+			case 'downloads':
+				$wp_query->query_vars['meta_query']['downloads'] ??= [
+					'key'     => 'downloads',
+					'type'    => 'UNSIGNED',
+					'compare' => 'EXISTS',
+				];
+				break;
 		}
 	}
 
@@ -1233,6 +1392,21 @@ class Plugin_Directory {
 	}
 
 	/**
+	 * Remove the prefix for the browse sections.
+	 * These should display "Term" rather than "Browse: Term".
+	 *
+	 * @param string $prefix the prefix for the archive.
+	 * @return string
+	 */
+	function filter_get_the_archive_title_prefix( $prefix ) {
+		if ( is_tax( 'plugin_section' ) ) {
+			$prefix = '';
+		}
+
+		return $prefix;
+	}
+
+	/**
 	 * Filter for pre_update_option_jetpack_options to ensure CPT posts are seen as public and searchable by TP
 	 *
 	 * @param mixed $new_value
@@ -1349,26 +1523,20 @@ class Plugin_Directory {
 
 		// New-style search links.
 		if ( get_query_var( 's' ) && isset( $_GET['s'] ) ) {
-			$url = site_url( '/search/' . urlencode( get_query_var( 's' ) ) . '/' );
-			if ( get_query_var( 'block_search' ) ) {
-				$url = add_query_arg( 'block_search', get_query_var( 'block_search' ), $url );
+			$url        = site_url( '/search/' . urlencode( get_query_var( 's' ) ) . '/' );
+			$query_vars = array_filter( $wp_query->query );
+
+			// Don't need the search..
+			unset( $query_vars['s'] );
+
+			// Temporary: Disable sorts for search.
+			unset( $query_vars['order'], $query_vars['orderby'] );
+
+			if ( ! empty( $query_vars ) ) {
+				$url = add_query_arg( $query_vars, $url );
 			}
 
 			wp_safe_redirect( $url, 301 );
-			die();
-		}
-
-		// Existing tag with no plugins.
-		if (
-			is_tax( 'plugin_tags' ) &&
-			! have_posts() &&
-			// Only redirect if only plugin_tags is queried. Other taxonomies cannot be handled.
-			count( $wp_query->tax_query->queried_terms ) <= 1
-		) {
-			// [1] => plugins [2] => tags [3] => example-plugin-name [4..] => random().
-			$path = explode( '/', $_SERVER['REQUEST_URI'] );
-
-			wp_safe_redirect( home_url( '/search/' . urlencode( $path[3] ) . '/' ), 301 );
 			die();
 		}
 
@@ -1567,50 +1735,9 @@ class Plugin_Directory {
 		$plugin   = self::get_plugin_post( $plugin );
 		$releases = get_post_meta( $plugin->ID, 'releases', true );
 
-		// Meta doesn't exist yet? Lets fill it out.
+		// Data doesn't exist yet? Lets fill it out.
 		if ( false === $releases || ! is_array( $releases ) ) {
-			update_post_meta( $plugin->ID, 'releases', [] );
-
-			$tags = get_post_meta( $plugin->ID, 'tags', true );
-			if ( $tags ) {
-				foreach ( $tags as $tag_version => $tag ) {
-					self::add_release( $plugin, [
-						'date'                   => strtotime( $tag['date'] ),
-						'tag'                    => $tag['tag'],
-						'version'                => $tag_version,
-						'committer'              => [ $tag['author'] ],
-						'zips_built'             => true, // Old release, assume they were built.
-						'confirmations_required' => 0,    // Old release, assume it's released.
-					] );
-				}
-			} else {
-				// Pull from SVN directly.
-				$svn_tags = Tools\SVN::ls( "https://plugins.svn.wordpress.org/{$plugin->post_name}/tags/", true ) ?: [];
-				foreach ( $svn_tags as $entry ) {
-					// Discard files
-					if ( 'dir' !== $entry['kind'] ) {
-						continue;
-					}
-
-					$tag = $entry['filename'];
-
-					// Prefix the 0 for plugin versions like 0.1
-					if ( '.' == substr( $tag, 0, 1 ) ) {
-						$tag = "0{$tag}";
-					}
-
-					self::add_release( $plugin, [
-						'date'                   => strtotime( $entry['date'] ),
-						'tag'                    => $entry['filename'],
-						'version'                => $tag,
-						'committer'              => [ $entry['author'] ],
-						'zips_built'             => true, // Old release, assume they were built.
-						'confirmations_required' => 0,    // Old release, assume it's released.
-					] );
-				}
-			}
-
-			$releases = get_post_meta( $plugin->ID, 'releases', true ) ?: [];
+			$releases = self::prefill_releases_meta( $plugin );
 		}
 
 		/**
@@ -1629,13 +1756,76 @@ class Plugin_Directory {
 	}
 
 	/**
+	 * Prefill the releases meta items for a plugin.
+	 *
+	 * @param \WP_Post $plugin Plugin post object.
+	 * @return array
+	 */
+	public static function prefill_releases_meta( $plugin ) {
+		if ( ! $plugin->releases ) {
+			update_post_meta( $plugin->ID, 'releases', [] );
+		}
+
+		$tags = get_post_meta( $plugin->ID, 'tags', true );
+		if ( $tags ) {
+			foreach ( $tags as $tag_version => $tag ) {
+				self::add_release( $plugin, [
+					'date'                   => strtotime( $tag['date'] ),
+					'tag'                    => $tag['tag'],
+					'version'                => $tag_version,
+					'committer'              => [ $tag['author'] ],
+					'zips_built'             => true, // Old release, assume they were built.
+					'confirmations_required' => 0,    // Old release, assume it's released.
+				] );
+			}
+		} else {
+			// Pull from SVN directly.
+			$svn_tags = Tools\SVN::ls( "https://plugins.svn.wordpress.org/{$plugin->post_name}/tags/", true ) ?: [];
+			foreach ( $svn_tags as $entry ) {
+				// Discard files
+				if ( 'dir' !== $entry['kind'] ) {
+					continue;
+				}
+
+				$tag = $entry['filename'];
+
+				// Prefix the 0 for plugin versions like 0.1
+				if ( '.' == substr( $tag, 0, 1 ) ) {
+					$tag = "0{$tag}";
+				}
+
+				self::add_release( $plugin, [
+					'date'                   => strtotime( $entry['date'] ),
+					'tag'                    => $entry['filename'],
+					'version'                => $tag,
+					'committer'              => [ $entry['author'] ],
+					'zips_built'             => true, // Old release, assume they were built.
+					'confirmations_required' => 0,    // Old release, assume it's released.
+				] );
+			}
+		}
+
+		return get_post_meta( $plugin->ID, 'releases', true ) ?: [];
+	}
+
+	/**
 	 * Fetch a specific release of the plugin, by tag.
+	 *
+	 * @param string $plugin Plugin slug.
+	 * @param string $tag    Plugin version / Release tag.
+	 * @return array|bool
 	 */
 	public static function get_release( $plugin, $tag ) {
 		$releases = self::get_releases( $plugin );
 
+		// Look for the version released as a tag.
 		$filtered = wp_list_filter( $releases, compact( 'tag' ) );
+		if ( $filtered ) {
+			return array_shift( $filtered );
+		}
 
+		// Look for the tag as a trunk version.
+		$filtered = wp_list_filter( $releases, [ 'tag' => "trunk@{$tag}", 'version' => $tag ] );
 		if ( $filtered ) {
 			return array_shift( $filtered );
 		}
@@ -1645,6 +1835,10 @@ class Plugin_Directory {
 
 	/**
 	 * Add a Plugin Release to the internal storage.
+	 *
+	 * @param string $plugin Plugin slug.
+	 * @param array  $data   Release data.
+	 * @return bool
 	 */
 	public static function add_release( $plugin, $data ) {
 		if ( ! isset( $data['tag'] ) ) {
@@ -1653,22 +1847,35 @@ class Plugin_Directory {
 		$plugin = self::get_plugin_post( $plugin );
 
 		$release = self::get_release( $plugin, $data['tag'] ) ?: [
-			'date'                   => time(),
-			'tag'                    => '',
-			'version'                => '',
+			'date'                     => time(),
+			'tag'                      => '',
+			'version'                  => '',
 			// Assume zips built if no release confirmation.
-			'zips_built'             => ! $plugin->release_confirmation,
-			'confirmations'          => [],
+			'zips_built'               => ! $plugin->release_confirmation,
+			'zips_built_from_revision' => 0,
+			'confirmations'            => [],
 			// Confirmed by default if no release confiration.
-			'confirmed'              => ! $plugin->release_confirmation,
-			'confirmations_required' => (int) $plugin->release_confirmation,
-			'committer'              => [],
-			'revision'               => [],
+			'confirmed'                => ! $plugin->release_confirmation,
+			'confirmations_required'   => (int) $plugin->release_confirmation,
+			'committer'                => [],
+			'revision'                 => [],
 		];
 
 		// Fill the $release with the newish data. This could/should use wp_parse_args()?
 		foreach ( $data as $k => $v ) {
-			$release[ $k ] = $v;
+			if ( is_array( $release[ $k ] ) ) {
+				$release[ $k ] = array_unique( array_merge( $release[ $k ], $v ) );
+			} else {
+				$release[ $k ] = $v;
+			}
+		}
+
+		/*
+		 * Allow a discarded release to be reset.
+		 * See API\Routes\Plugin_Release_Confirmation::undo_discard_release()
+		 */
+		if ( isset( $data['undo-discard'] ) && ! empty( $release['discarded'] ) && empty( $data['discarded'] ) ) {
+			unset( $release['discarded'] );
 		}
 
 		$releases = self::get_releases( $plugin );
@@ -1690,6 +1897,65 @@ class Plugin_Directory {
 		} );
 
 		return update_post_meta( $plugin->ID, 'releases', $releases );
+	}
+
+	/**
+	 * Remove a Plugin Release from the internal storage.
+	 *
+	 * @param string $plugin Plugin slug.
+	 * @param string $tag    Release tag.
+	 * @return bool
+	 */
+	public static function remove_release( $plugin, $tag ) {
+		$result   = false;
+		$plugin   = self::get_plugin_post( $plugin );
+		$releases = self::get_releases( $plugin );
+
+		// Remove the release in question.
+		foreach ( $releases as $i => $r ) {
+			if ( $r['tag'] === $tag && ! $r['confirmed'] ) {
+				unset( $releases[ $i ] );
+
+				$result = update_post_meta( $plugin->ID, 'releases', $releases );
+			}
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Add additional context to ZIP urls.
+	 *
+	 * The ZIP URL will have URL suffixed which is a rest api URL to information about the plugin.
+	 *
+	 * @param string $url           The URL to the ZIP file.
+	 * @param int    $attachment_id The attachment ID, or post ID.
+	 * @return string The URL to the ZIP file.
+	 */
+	public function add_info_to_zip_url( $url, $attachment_id ) {
+		$post = get_post( $attachment_id );
+		if ( $post && 'attachment' === $post->post_type && $post->post_parent ) {
+			$post = get_post( $post->post_parent );
+		}
+
+		if ( ! $url || ! $post || 'plugin' !== $post->post_type || ! current_user_can( 'edit_post', $post->ID ) ) {
+			return $url;
+		}
+
+		// Append with a anchor, such that CLI environments don't require special handling.
+		return API\Routes\Plugin_Review::append_plugin_review_info_url( $url, $post );
+	}
+
+	/**
+	 * Add a dns-prefetch for the CDNs we use.
+	 */
+	function wp_resource_hints( $uris, $type ) {
+		if ( 'dns-prefetch' === $type ) {
+			$uris[] = '//s.w.org';
+			$uris[] = '//ps.w.org';
+		}
+
+		return $uris;
 	}
 
 	/**
@@ -1816,6 +2082,14 @@ class Plugin_Directory {
 		$title = $args['post_title'] ?: $args['post_name'];
 		$slug  = $args['post_name'] ?: sanitize_title( $title );
 
+		// Remove null items (date-related fields) to fallback to the defaults below.
+		$args = array_filter(
+			$args,
+			function( $item ) {
+				return ! is_null( $item );
+			}
+		);
+
 		$post_date     = current_time( 'mysql' );
 		$post_date_gmt = current_time( 'mysql', 1 );
 
@@ -1829,21 +2103,12 @@ class Plugin_Directory {
 			'post_modified_gmt' => $post_date_gmt,
 		) );
 
-		$update = ! empty( $args['ID'] );
 		$result = wp_insert_post( $args, true );
 
 		if ( ! is_wp_error( $result ) ) {
 			wp_cache_set( $result, $slug, 'plugin-slugs' );
-			$result = get_post( $result );
 
-			if ( ! $update ) {
-				$owner = get_userdata( $result->post_author );
-				Tools::audit_log( sprintf(
-					'Submitted by <a href="%s">%s</a>.',
-					esc_url( 'https://profiles.wordpress.org/' . $owner->user_nicename . '/' ),
-					$owner->user_login
-				), $result->ID );
-			}
+			$result = get_post( $result );
 		}
 
 		return $result;

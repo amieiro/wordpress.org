@@ -289,6 +289,9 @@ function determine_trac_ticket( $pr ) {
 		// Then any trac instance.
 		'!(?P<trac>[a-z]+).trac.wordpress.org/ticket/(?P<id>\d+)!i',
 
+		// Any GitHub defined ticket autolink references.
+		'!(?:(?P<trac>Core|Meta)-|ticket:)(?P<id>\d+)!i', // Core-1234, Meta-1234, ticket:1234
+
 		// Now for just plain ticket references without a trac instance.
 		'!(?:^|\s)#WP(\d+)!', // #WP1234
 		'!(?:^|\s)#(\d{4,5})!', // #1234
@@ -319,7 +322,7 @@ function determine_trac_ticket( $pr ) {
 
 				// If a Trac-specific link is detected, use that trac.
 				if ( ! empty( $m['trac'] ) ) {
-					$trac = $m['trac'];
+					$trac = strtolower( $m['trac'] );
 				}
 
 				return [ $trac, $id ];
@@ -385,10 +388,33 @@ function format_github_content_for_trac_comment( $desc ) {
 	$desc = preg_replace_callback(
 		'#^(?P<indent>[ >]*)```(?P<format>[a-z]+$)(?P<code>.+?)```$#sm',
 		function( $m ) {
+			$format = trim( $m['format'] );
+
+			// The HTML code block in trac renders actual HTML, set it as an XML code block for syntax highlighting.
+			if ( 'html' === $format ) {
+				$format = 'xml';
+			}
+
+			/*
+			 * Some other code processor types can end up rendering badly on Trac, limit to expected safe types.
+			 *
+			 * See https://trac.edgewall.org/wiki/1.1/WikiProcessors#AvailableProcessors
+			 */
+			$supported_formats = [ 'xml', 'php', 'js', 'javascript', 'sql', 'sh' ];
+			if ( ! in_array( $format, $supported_formats ) ) {
+				$format = 'default';
+			}
+
+			$code = trim( $m['code'] );
+			// replace a blank indented line at the end of the code block with.. nothing.
+			if ( $m['indent'] ) {
+				$code = preg_replace( "#\n[ >]+$#", '', $code );
+			}
+
 			return
 				$m['indent'] . "{{{\n" .
-				$m['indent'] . "#!" . trim( $m['format'] ) . "\n" .
-				trim( $m['code'] ) . "\n" .
+				$m['indent'] . "#!" . $format . "\n" .
+				$code . "\n" .
 				$m['indent'] . "}}}\n";
 		},
 		$desc
@@ -397,9 +423,9 @@ function format_github_content_for_trac_comment( $desc ) {
 	$desc = preg_replace( '#```(.+?)```#s', '{{{$1}}}', $desc );
 
 	// Convert Images (Must happen prior to Links, as the only difference is a preceeding !)
-	$desc = preg_replace( '#!\[(.+?)\]\(https?://(.+?)\)#', '[[Image(https://i0.wp.com/$2)]]', $desc );
+	$desc = preg_replace( '#!\[(.+?)\]\((.+?)\)#', '[[Image($2)]]', $desc );
 	// Convert Images embedded as `<img>`.
-	$desc = preg_replace( '#<img[^>]+src=(["\'])https?://(.+?)\\1[^>]*>#', '[[Image(https://i0.wp.com/$2)]]', $desc );
+	$desc = preg_replace( '#<img[^>]+src=(["\'])(.+?)\\1[^>]*>#', '[[Image($2)]]', $desc );
 
 	// Convert Links.
 	$desc = preg_replace( '#\[(.+?)\]\((.+?)\)#', '[$2 $1]', $desc );
@@ -434,5 +460,12 @@ function format_github_content_for_trac_comment( $desc ) {
 	// It shouldn't exist at this point, but if it does, replace it back with it's original content.
 	$desc = str_replace( '~~~TABLEHEADER~~~', '|| ||', $desc );
 
-	return trim( $desc );
+	$desc = trim( $desc );
+
+	// After all this, if it's a HTML comment, we're not interested in syncing it.
+	if ( preg_match( '/[{`]+\s*#!html/i', $desc ) ) {
+		return false;
+	}
+
+	return $desc;
 }

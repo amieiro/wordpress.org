@@ -34,11 +34,12 @@ class Plugin_Posts extends \WP_Posts_List_Table {
 	 */
 	public function filter_columns( $columns ) {
 		// Rename some columns.
-		$columns['author']   = __( 'Submitter', 'wporg-plugins' );
-		$columns['reviewer'] = __( 'Assigned Reviewer', 'wporg-plugins' );
-		$columns['comments'] = '<span class="vers comment-grey-bubble" title="' . esc_attr__( 'Internal Notes', 'wporg-plugins' ) . '"><span class="screen-reader-text">' . __( 'Internal Notes', 'wporg-plugins' ) . '</span></span>';
-		$columns['zip']      = 'Latest Zip';
-		$columns['loc']      = 'Lines of PHP Code'; 
+		$columns['author']         = __( 'Submitter', 'wporg-plugins' );
+		$columns['reviewer']       = __( 'Assigned Reviewer', 'wporg-plugins' );
+		$columns['comments']       = '<span class = "vers comment-grey-bubble" title = "' . esc_attr__( 'Internal Notes', 'wporg-plugins' ) . '"><span class = "screen-reader-text">' . __( 'Internal Notes', 'wporg-plugins' ) . '</span></span>';
+		$columns['zip']            = 'Latest Zip';
+		$columns['loc']            = 'Lines of PHP Code'; 
+		$columns['submitted_date'] = 'Submitted Date'; 
 
 		// We don't want the stats column.
 		unset( $columns['stats'] );
@@ -52,9 +53,10 @@ class Plugin_Posts extends \WP_Posts_List_Table {
 	 * The sortable columns.
 	 */
 	public function filter_sortable_columns( $columns ) {
-		$columns[ 'reviewer' ] = [ 'assigned_reviewer_time', 'asc' ];
-		$columns[ 'zip' ]      = [ '_submitted_zip_size', 'asc' ];
-		$columns[ 'loc' ]      = [ '_submitted_zip_loc', 'asc' ];
+		$columns[ 'reviewer' ]       = [ 'assigned_reviewer_time', 'asc' ];
+		$columns[ 'zip' ]            = [ '_submitted_zip_size', 'asc' ];
+		$columns[ 'loc' ]            = [ '_submitted_zip_loc', 'asc' ];
+		$columns[ 'submitted_date' ] = [ '_submitted_date', 'asc' ];
 
 		return $columns;
 	}
@@ -76,6 +78,7 @@ class Plugin_Posts extends \WP_Posts_List_Table {
 			$columns[] = 'reviewer';
 			$columns[] = 'zip';
 			$columns[] = 'loc';
+			$columns[] = 'submitted_date';
 		}
 
 		return $columns;
@@ -587,9 +590,9 @@ class Plugin_Posts extends \WP_Posts_List_Table {
 				<?php
 				wp_dropdown_users( [
 					'name'              => 'reviewer',
-					'selected'          => intval( $_REQUEST['reviewer'] ?? 0 ),
+					'selected'          => intval( $_REQUEST['reviewer'] ?? '' ),
 					'show_option_none'  => __( 'All Reviewers', 'wporg-plugins' ),
-					'option_none_value' => 0,
+					'option_none_value' => '',
 					'role__in'          => [ 'plugin_admin', 'plugin_reviewer' ],
 				] );
 				submit_button( __( 'Filter', 'wporg-plugins' ), 'secondary', false, false );
@@ -707,13 +710,17 @@ class Plugin_Posts extends \WP_Posts_List_Table {
 			$zip_size = size_format( filesize( get_attached_file( $zip_file->ID ) ), 1 );
 
 			$url  = wp_get_attachment_url( $zip_file->ID );
-			$name = basename( $url );
-			$name = explode( '_', $name, 3 )[2];
+			$name = $zip_file->submitted_name;
+			if ( ! $name ) {
+				$name = preg_split( '/[?#]/', basename( $url ) )[0];
+				$name = explode( '_', $name, 3 )[2];
+			}
 
 			printf(
-				'<a href="%1$s">%2$s</a><br>%3$s<br>(<a href="%4$s" target="_blank">preview</a> | <a href="%5$s" target="_blank">pcp</a>)</li>',
+				'<a href="%1$s">%2$s</a> v%3$s<br>%4$s<br>(<a href="%5$s" target="_blank">test</a> | <a href="%6$s" target="_blank">pcp</a>)<br></li>',
 				esc_url( $url ),
 				esc_html( $name ),
+				esc_html( $zip_file->version ),
 				esc_html( $zip_size ),
 				esc_url( Template::preview_link_zip( $post->post_name, $zip_file->ID ) ),
 				esc_url( Template::preview_link_zip( $post->post_name, $zip_file->ID, 'pcp' ) )
@@ -728,5 +735,9 @@ class Plugin_Posts extends \WP_Posts_List_Table {
 		}
 
 		echo number_format_i18n( (int) $post->_submitted_zip_loc ) ?: '-';
+	}
+
+	public function column_submitted_date( $post ) {
+		echo gmdate( 'Y/m/d g:i a', $post->_submitted_date ?? 0 );
 	}
 }

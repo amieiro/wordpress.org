@@ -83,6 +83,13 @@ class Admin {
 		// Randomize the queue.
 		add_filter( 'query_vars',                              [ __CLASS__, 'add_query_var_for_random' ] );
 		add_action( 'pre_get_posts',                           [ __CLASS__, 'randomize_the_queue' ] );
+
+		// Add button to skip current photo in the queue.
+		add_action( "add_meta_boxes_{$post_type}",             [ __CLASS__, 'add_skip_queued_photo_meta_box' ], 10, 2 );
+		add_action( 'admin_init',                              [ __CLASS__, 'admin_redirect_to_next_photo' ] );
+
+		// Shrink height of content editor.
+		add_filter( 'wp_editor_settings',                      [ __CLASS__, 'shrink_editor_height' ], 10, 2 );
 	}
 
 	/**
@@ -131,16 +138,16 @@ class Admin {
 		// Note: Not reporting who flagged a post once it has been unflagged.
 		if ( $user_id = Flagged::get_unflagger( $post ) ) {
 			/* translators: 1: URL to the profile of the user who unflagged the photo, 2: The name of the user who unflagged the photo. */
-			$notice = __( '<strong>This photo was unflagged by <a href="%1$s">%2$s</a> and is safe to moderate.', 'wporg-photos' );
+			$notice = __( '<strong>This photo was unflagged by <a href="%1$s">%2$s</a> and is safe to moderate.</strong>', 'wporg-photos' );
 			$notice_type = 'success';
 		}
 		elseif ( $user_id = Flagged::get_flagger( $post ) ) {
 			// A user can't actually flag their own submission. This results from auto-flagging.
 			if ( $user_id === $post->post_author ) {
-				$notice = __( '<strong>This photo was automatically flagged due to potential concerns after image analysis.', 'wporg-photos' );
+				$notice = __( '<strong>This photo was automatically flagged due to potential concerns after image analysis.</strong>', 'wporg-photos' );
 			} else {
 				/* translators: 1: URL to the profile of the user who flagged the photo, 2: The name of the user who flagged the photo. */
-				$notice = __( '<strong>This photo was flagged by <a href="%1$s">%2$s</a>.', 'wporg-photos' );
+				$notice = __( '<strong>This photo was flagged by <a href="%1$s">%2$s</a>.</strong>', 'wporg-photos' );
 			}
 		}
 
@@ -287,9 +294,10 @@ class Admin {
 	/**
 	 * Determines if the 'Photo' column should be added to a post listing table.
 	 *
+	 * @param bool $include_rejected Optional. Include the 'reject' post status? Default false.
 	 * @return bool True if the 'Photo' column should be added; else false.
 	 */
-	public static function should_include_photo_column() {
+	public static function should_include_photo_column( $include_rejected = false ) {
 		$screen = get_current_screen();
 		$post_type = Registrations::get_post_type();
 
@@ -300,6 +308,9 @@ class Admin {
 		];
 
 		$post_statuses = Photo::get_post_statuses_with_photo();
+		if ( $include_rejected ) {
+			$post_statuses[] = Rejection::get_post_status();
+		}
 
 		return (
 			// Screen is known.
@@ -579,6 +590,7 @@ class Admin {
 		$exif = Photo::get_exif( $parent_id );
 
 		if ( ! $exif ) {
+			echo '<p class="no-exif">' . esc_html__( 'No EXIF data was found.', 'wporg-photos' ) . "</p>\n";
 			return;
 		}
 
@@ -588,6 +600,30 @@ class Admin {
 			echo "<dd>{$data['value']}</dd>\n";
 		}
 		echo "</dl>\n";
+
+		// Show ALL EXIF data.
+		$all_exif = Photo::get_all_exif( $parent_id );
+		if ( $all_exif ) {
+			ksort( $all_exif );
+
+			echo '<div class="photo-all-exif-container">';
+			echo '<button id="photo-all-exif-toggle" class="button-link hide-if-no-js" type="button" aria-expanded="true">' . esc_html__( 'Toggle all raw EXIF data', 'wporg-photos' ) . '</button>';
+			echo '<dl class="photo-all-exif">';
+
+			foreach ( $all_exif as $key => $value ) {
+				if ( '' === $value ) {
+					continue;
+				}
+
+				echo '<dt>' . esc_html( $key ) . "</dt>\n";
+				if ( is_array( $value ) ) {
+					$value = '[' . implode( ', ', $value ) . ']';
+				}
+				echo '<dd>' . esc_html( $value ) . "</dd>\n";
+			}
+
+			echo "</dl></div>\n";
+		}
 	}
 
 	/**
@@ -694,7 +730,7 @@ class Admin {
 	 * @param array   $args Associative array of additional data.
 	 */
 	public static function meta_box_photo( $post, $args ) {
-		self::output_photo_in_metabox( $post, [ 900, 450 ], true );
+		echo Template_Tags\get_photo_as_grid_item( $post, [ 900, 450 ], 'image' );
 	}
 
 	/**
@@ -742,9 +778,13 @@ class Admin {
 			}
 
 			// Show the photo.
-			self::output_photo_in_metabox( $photo, 'medium', false );
+			echo Template_Tags\get_photo_as_grid_item( $photo, 'medium', 'edit' );
 
 			$shown_photos++;
+		}
+
+		if ( ! $shown_photos ) {
+			echo '<p>' . __( 'This contributor does not have any other submitted photos.', 'wporg-photos' ) . "</p>\n";
 		}
 
 		echo '</div>' . "\n";
@@ -765,54 +805,6 @@ class Admin {
 	}
 
 	/**
-	 * Outputs markup for a photo intended to be shown in an admin metabox.
-	 *
-	 * @param WP_Post      $post             Photo post object.
-	 * @param string|int[] $size             Image size. Accepts any registered image size name, or an
-	 *                                       array of width and height values in pixels (in that order).
-	 * @param bool         $link_to_fullsize Should the image link to its full-sized version? If not, it
-	 *                                       will link to edit the photo post. Default true;
-	 */
-	protected static function output_photo_in_metabox( $post, $size, $link_to_fullsize = true ) {
-		$image_id = get_post_thumbnail_id( $post );
-		if ( ! $image_id ) {
-			return;
-		}
-
-		$pending_notice = '';
-		$classes = 'photo-thumbnail';
-
-		if ( Photo::is_controversial( $image_id ) ) {
-			$classes .= ' blurred';
-		}
-
-		if ( 'pending' === $post->post_status ) {
-			$classes .= ' pending';
-			if ( ! $link_to_fullsize ) {
-				$pending_notice = '<div class="pending-notice">' . __( 'Pending', 'wporg-photos' ) . '</div>';
-			}
-		}
-
-		if ( $link_to_fullsize ) {
-			$link_url = wp_get_attachment_url( $image_id );
-			$label = __( 'View full-sized version of the photo.', 'wporg-photos' );
-		} else {
-			$link_url = get_edit_post_link( $post );
-			$label = sprintf( __( 'Edit photo post &#8220;%s&#8221;', 'wporg-photos' ), $post->post_title );
-		}
-
-		printf(
-			'<span><a class="photos-photo-link row-title" href="%s" target="_blank" aria-label="%s"><img class="%s" src="%s" alt="" /></a>%s</span>',
-			esc_url( $link_url ),
-			/* translators: %s: Post title. */
-			esc_attr( $label ),
-			esc_attr( $classes ),
-			esc_url( get_the_post_thumbnail_url( $post->ID, $size ) ),
-			$pending_notice
-		);
-	}
-
-	/**
 	 * Appends the count of the published photos to author names in photo post
 	 * listings.
 	 *
@@ -822,16 +814,19 @@ class Admin {
 	public static function add_published_photos_count_to_author( $display_name ) {
 		global $authordata;
 
-		if ( ! is_admin() || ! self::should_include_photo_column() ) {
+		if ( ! is_admin() || ! self::should_include_photo_column( true ) ) {
 			return $display_name;
 		}
 
 		// Close link to contributor's listing of photos.
 		$display_name .= '</a>';
 
+		$post_type     = Registrations::get_post_type();
+		$reject_status = Rejection::get_post_status();
+
 		// Show number of approved photos.
 		$approved_link = add_query_arg( [
-			'post_type'   => Registrations::get_post_type(),
+			'post_type'   => $post_type,
 			'post_status' => 'publish',
 			'author'      => $authordata->ID,
 		], 'edit.php' );
@@ -842,11 +837,27 @@ class Admin {
 		)
 		. "</div>\n";
 
+		// Show number of photos approved on this calendar day.
+		$approved_today_count = User::count_photos_for_today( 'publish' );
+		if ( $approved_today_count ) {
+			$approved_today_link = add_query_arg( [
+				'post_type'   => $post_type,
+				'post_status' => 'publish',
+				'author'      => $authordata->ID,
+			], 'edit.php' );
+			$display_name .= '<div class="user-approved-today-count">'
+				. sprintf(
+					__( '&#x21AA; (today): %s', 'wporg-photos' ),
+					sprintf( '<strong><a href="%s">%d</a></strong>', $approved_today_link, $approved_today_count )
+				)
+				. "</div>\n";
+		}
+
 		// Show number of pending photos if there are any.
 		$pending_count = User::count_pending_photos();
 		if ( $pending_count ) {
 			$pending_link = add_query_arg( [
-				'post_type'   => Registrations::get_post_type(),
+				'post_type'   => $post_type,
 				'post_status' => 'pending',
 				'author'      => $authordata->ID,
 			], 'edit.php' );
@@ -863,8 +874,8 @@ class Admin {
 		$rejection_count = User::count_rejected_photos( $authordata->ID );
 		if ( $rejection_count ) {
 			$rejected_link = add_query_arg( [
-				'post_type'   => Registrations::get_post_type(),
-				'post_status' => Rejection::get_post_status(),
+				'post_type'   => $post_type,
+				'post_status' => $reject_status,
 				'author'      => $authordata->ID,
 			], 'edit.php' );
 			$display_name .= '<div class="user-rejected-count">'
@@ -872,6 +883,22 @@ class Admin {
 					/* translators: %s: Count of user rejections linked to listing of their rejections. */
 					_n( 'Rejected: <strong>%s</strong>', 'Rejected: <strong>%s</strong>', $rejection_count, 'wporg-photos' ),
 					sprintf( '<a href="%s">%d</a>', $rejected_link, $rejection_count )
+				)
+				. "</div>\n";
+		}
+
+		// Show number of photos rejected on this calendar day.
+		$rejected_today_count = User::count_photos_for_today( $reject_status );
+		if ( $rejected_today_count ) {
+			$rejected_today_link = add_query_arg( [
+				'post_type'   => $post_type,
+				'post_status' => $reject_status,
+				'author'      => $authordata->ID,
+			], 'edit.php' );
+			$display_name .= '<div class="user-rejected-today-count">'
+				. sprintf(
+					__( '&#x21AA; (today): %s', 'wporg-photos' ),
+					sprintf( '<strong><a href="%s">%d</a></strong>', $rejected_today_link, $rejected_today_count )
 				)
 				. "</div>\n";
 		}
@@ -1015,7 +1042,7 @@ class Admin {
 	public static function show_moderator() {
 		global $post;
 
-		if ( ! $post || 'publish' !== $post->post_status ) {
+		if ( ! $post ) {
 			return;
 		}
 
@@ -1096,7 +1123,7 @@ class Admin {
 					<?php if ( $author->user_url ) { ?><a class="photo-contributor-url" rel="noopener noreferrer" href="<?php echo esc_url( $author->user_url ); ?>"><?php } ?>
 					<?php echo $author->display_name; ?>
 					<?php if ( $author->user_url ) { ?></a><?php } ?>
-					<div class="photo-contributor-profile"><a href="https://profiles.wordpress.org/<?php esc_attr_e( $author->user_nicename ); ?>/">@<?php echo $author->user_nicename; ?></a></div>
+					<div class="photo-contributor-profile"><a href="<?php echo esc_url( 'https://profiles.wordpress.org/' . $author->user_nicename . '/' ); ?>">@<?php echo $author->user_nicename; ?></a></div>
 				</strong>
 				<ul>
 					<li><?php
@@ -1169,6 +1196,54 @@ class Admin {
 				}
 			?>
 			</div>
+
+			<?php if ( $rejected_count ) : ?>
+			<div class="photo-contributor-rejection-stats">
+				<h4><?php esc_html_e( 'Rejection stats:', 'wporg-photos' ); ?></h4>
+				<?php
+					$rejection_reasons = Rejection::get_user_rejection_reasons( $author->ID );
+					$submission_errors_key = 'submission-error';
+					$submission_errors_count = 0;
+
+					// Omit submission errors since they don't count as rejections, but do note the count.
+					if ( ! empty( $rejection_reasons[ $submission_errors_key ] ) ) {
+						$submission_errors_count = $rejection_reasons[ $submission_errors_key ];
+						unset( $rejection_reasons[ $submission_errors_key ] );
+					}
+
+					$total_rejections = array_reduce( array_values( $rejection_reasons ), function ( $total, $i ) { return $total += $i; }, 0 );
+					$all_reasons = Rejection::get_rejection_reasons();
+
+					if ( $rejection_reasons ) {
+						echo '<table>';
+						echo '<tr><th>' . __( 'Reason', 'wporg-photos' ) . '</th><th>' . __( 'Total', 'wporg-photos' ) . '</th><th>%</th></tr>';
+					}
+					foreach ( $rejection_reasons as $reason => $count ) {
+						echo '<tr>';
+						echo '<td title="' . esc_attr( $all_reasons[ $reason ]['label'] ?? '' ) . '">' . esc_html( $reason ) . '</td>';
+						echo '<td>' . number_format_i18n( $count ) . '</td>';
+						echo '<td>' . number_format_i18n( ( $count / $total_rejections ) * 100, 2 ) . '%</td>';
+						echo "</tr>\n";
+					}
+					if ( $rejection_reasons ) {
+						echo "</table>\n";
+					}
+
+					echo '<p>';
+					/* translators: %s: Rejection rate as a percentage. */
+					printf( __( 'Total rejection rate: %s', 'wporg-photos'), '<strong>' . round( ( $total_rejections / ( $photos_count + $total_rejections ) ) * 100, 2 ) .'%</strong>' );
+					echo "</p>\n";
+
+					if ( $submission_errors_count ) {
+						echo '<p>';
+						/* translators: %s: The number of submission errors. */
+						printf( __( 'Submission errors (which are\'t counted as submissions): %s', 'wporg-photos' ), $submission_errors_count );
+						echo "</p>\n";
+					}
+				?>
+			</div>
+			<?php endif; ?>
+
 		</div>
 
 		<?php
@@ -1484,6 +1559,68 @@ class Admin {
 	}
 
 	/**
+	 * Registers meta box used for the 'skip' button to load another photo.
+	 *
+	 * @param WP_Post $post Post object.
+	 */
+	public static function add_skip_queued_photo_meta_box( $post ) {
+		if ( ! $post ) {
+			return;
+		}
+
+		if ( 'pending' === $post->post_status ) {
+			add_meta_box(
+				'photoskip',
+				__( 'Skip Photo', 'wporg-photos' ),
+				[ __CLASS__, 'output_skip_queued_photo_meta_box' ],
+				$post->post_type,
+				'side',
+				'core'
+			);
+		}
+
+	}
+
+	/**
+	 * Outputs the metabox for the skip button.
+	 *
+	 * @param WP_Post $post Current post object.
+	 */
+	public static function output_skip_queued_photo_meta_box( $post ) {
+		printf(
+			'<a href="%s" id="photo-dir-skip-photo" class="page-title-action" title="%s">%s</a>',
+			esc_url( add_query_arg( 'skipphoto', '1' ) ),
+			esc_attr__( 'Skip this photo and load another.', 'wporg-photos' ),
+			__( 'Skip Photo', 'wporg-photos')
+		);
+	}
+
+	/**
+	 * Redirects to the next photo in the queue when the current one is being skipped.
+	 */
+	public static function admin_redirect_to_next_photo() {
+		$post_type = Registrations::get_post_type();
+
+		// If a random photo is being requested, then redirect to one.
+		if (
+			'1' === ( $_GET['skipphoto'] ?? false )
+		&&
+			'edit' === ( $_GET['action'] ?? false )
+		&&
+			! empty( $_GET['post'] )
+		) {
+			$exclude_photos = [ intval( $_GET['post'] ) ];
+
+			$next_photo = Posts::get_next_post_in_queue( 'rand', '', $exclude_photos );
+
+			if ( $next_photo ) {
+				wp_redirect( get_edit_post_link( $next_photo->ID, 'url' ), 302 );
+				exit;
+			}
+		}
+	}
+
+	/**
 	 * Adds 'random' as a custom query variable for photo queue listings.
 	 *
 	 * @param string[] $vars The array of allowed query variable names.
@@ -1508,15 +1645,20 @@ class Admin {
 	/**
 	 * Randomizes the list of posts in the queue.
 	 *
-	 * Note: Can be disabled via query string: ?random=0
+	 * Note: Can be disabled if explicitly sorting via a post field or via query string: ?random=0
 	 */
 	public static function randomize_the_queue( $query ) {
 		if ( ! is_admin() ) {
 			return;
 		}
 
-		// Don't randomize if disabled via query parameter.
+		// Bail if disabled via query parameter.
 		if ( '0' === $query->get( 'random' ) ) {
+			return;
+		}
+
+		// Bail if already explicitly sorting by a post field.
+		if ( ! empty( $_GET['orderby'] ) && 'random' !== $_GET['orderby'] ) {
 			return;
 		}
 
@@ -1530,6 +1672,23 @@ class Admin {
 		) {
 			$query->set( 'orderby', 'rand' );
 		}
+	}
+
+	/**
+	 * Shrinks the height of the content editor when editing photo posts.
+	 *
+	 * @param array  $settings  Array of editor arguments.
+	 * @param string $editor_id Unique editor identifier.
+	 * @return array
+	 */
+	public static function shrink_editor_height( $settings, $editor_id ) {
+		global $post_type;
+
+		if ( Registrations::get_post_type() === $post_type ) {
+			$settings['editor_height'] = '80px';
+		}
+
+		return $settings;
 	}
 
 }

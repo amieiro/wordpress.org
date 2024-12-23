@@ -22,22 +22,18 @@ namespace Dotorg\Slack\Announce;
 function get_whitelist() {
 	$wordcamp_central = array(
 		'_DorsVenabili', // @rocio on Slack
-		'andreamiddleton',
 		'angelasjin',
-		'camikaos',
 		'chanthaboune',
-		'coreymckrill',
 		'courtneypk',
-		'evarlese',
 		'harishanker',
 		'harmonyromo', // @Harmony Romo on Slack
-		'hlashbrooke',
-		'iandunn',
 		'Nao',
+		'peiraisotta',
 		'ryelle',
 	);
 
 	return array(
+		// Note: For #x-y-release-leads / #x-y-feature, #core announce is inherited automatically.
 		'6-4-release-leads' => array(
 			'akshayar', // @akshaya on Slack
 			'cbringmann', // @Chloé Bringmann on Slack
@@ -52,20 +48,13 @@ function get_whitelist() {
 			'arush',
 			'audrasjb',
 			'azhiyadev', // @Hauwa Abashiya on Slack
+			'elblakeo31', // @Blake (Equalify)
 			'joedolson',
 			'joesimpsonjr',
+			'nhrrob',
 			'nrqsnchz',
+			'rcreators', // @Rishi Mehta on Slack
 			'rianrietveld',
-			'ryokuhi',
-			'sarahricker',
-		),
-		'accessibility-docs' => array(
-			'sarahricker',
-		),
-		'accessibility-events' => array(
-			'audrasjb',
-			'joedolson',
-			'nrqsnchz',
 			'ryokuhi',
 			'sarahricker',
 		),
@@ -82,12 +71,15 @@ function get_whitelist() {
 			'danielbachhuber',
 			'schlessera',
 		),
-		'community-events' => array_merge( $wordcamp_central, array(
-			'francina',
-		) ),
+		'community-events' => array(
+			// Inherits from #community-team.
+		),
 		'community-team' => array_merge( $wordcamp_central, array(
 			'francina',
 			'myselfkhayer',
+			'nukaga',
+			'st810amaze',
+			'leogopal',
 		) ),
 		'contributor-day' => array(
 			'camikaos',
@@ -109,8 +101,10 @@ function get_whitelist() {
 			'chaion07',
 			'chanthaboune',
 			'costdev',
+			'colorful-tones',
 			'danieltj',
 			'desrosj',
+			'fabiankaegy',
 			'francina',
 			'hellofromTonya', // @hellofromtonya on Slack
 			'ironprogrammer',
@@ -125,10 +119,13 @@ function get_whitelist() {
 			'markparnell',
 			'marybaum',
 			'meaganhanes',
+			'meher',
 			'metalandcoffee',
+			'mikachan',
 			'monikarao',
 			'mukesh27',
 			'nicolefurlan',
+			'nhrrob',
 			'oglekler',
 			'pbiron',
 			'priethor',
@@ -136,6 +133,7 @@ function get_whitelist() {
 			'rajinsharwar', // @Rajin Sharwar on Slack
 			'sabernhardt',
 			'sncoker', // @shawntellecoker on Slack
+			'stoyangeorgiev', // @Stoyan Georgiev on Slack
 			'thelmachido', // @thelmachido-zw on Slack
 			'thewebprincess',
 			'webcommsat', // @abhanonstopnewsuk on Slack
@@ -174,6 +172,7 @@ function get_whitelist() {
 		) ),
 		'core-dev-blog' => array(
 			'bph',
+			'greenshady',
 		),
 		'core-docs' => array_merge( get_committers(), array(
 			'DrewAPicture', // @drew on Slack
@@ -225,7 +224,7 @@ function get_whitelist() {
 			'desrosj',
 			'joemcgill',
 			'karmatosed',
-			'mikeschroder', // @mike on Slack
+			'kirasong',
 			'ocean90',
 		) ),
 		'core-multisite' => array_merge( get_committers(), array(
@@ -285,9 +284,12 @@ function get_whitelist() {
 			'hellofromTonya', // @hellofromtonya on Slack
 			'ironprogrammer',
 			'justinahinon',
+			'mobarak',
 			'monikarao',
 			'ryan', // @boren on Slack
 			'webtechpooja', // @Pooja Derashri on Slack
+			'oglekler',
+			'krupajnanda',
 		) ),
 		'core-themes' => array_merge( get_committers(), array(
 			'anlino', // @andersnoren on Slack
@@ -358,27 +360,23 @@ function get_whitelist() {
 			'mariaojob', // @Mary Job on Slack
 			'sterndata',
 		),
-		'fse-outreach-experiment' => array(
-			'annezazu',
-			'colorful tones', // @colorful-tones on Slack
-			'daisyo', // @DaisyO on Slack
-			'greenshady',
-			'ndiego', // @Nick Diego on Slack
-		),
 		'glotpress' => array(
 			'Amieiro',
 			'ocean90',
 		),
 		'hosting' => array(
 			'andrew.taylor', // @ataylorme on Slack
+			'chaion07',
 			'Crixu',
-			'mikeschroder', // @mike on Slack
+			'grafruessel',
+			'kirasong',
 			'jadonn',
 			'JavierCasares',
 			'jessibelle',
 			'amykamala', // @amy kamala on Slack
 			'brechtryckaert',
 			'brettface',
+			'zunaid321', // @Zunaid Amin on Slack
 		),
 		'marketing' => array(
 			'bernard0omnisend', // Bernard Meyer on Slack
@@ -390,6 +388,9 @@ function get_whitelist() {
 			'robinwpdeveloper',
 			'santanainniss',
 			'SeReedMedia',
+		),
+		'media-corps' => array(
+			'eidolonnight',
 		),
 		'meta' => array(
 			'coreymckrill',
@@ -415,6 +416,7 @@ function get_whitelist() {
 		'meta-learn' => array(
 			'coreymckrill',
 			'courane01', // @Courtney on Slack
+			'devmuhib', // @Muhibul Haque on Slack
 			'digitalchild', // @Jamie Madden on Slack
 			'psykro', // @Jonathan on Slack
 			'tellyworth',
@@ -431,6 +433,13 @@ function get_whitelist() {
 			'stacimc',
 			'zackkrida',
 		),
+		'outreach' => array(
+			'annezazu',
+			'bph',
+			'colorful tones', // @colorful-tones on Slack
+			'greenshady',
+			'ndiego', // @Nick Diego on Slack
+		),
 		'core-performance' => array(
 			// #core (inc committers) already included via get_parent_channel().
 			'clarkeemily', // @Emily Clarke on Slack
@@ -442,6 +451,13 @@ function get_whitelist() {
 			'topher1kenobe',
 			'katiejrichards',
 			'marcusskyverge',
+		),
+		'playground' => array(
+			'akirk',
+			'bph',
+			'berislav.grgicak',
+			'bpayton',
+			'zieladam',
 		),
 		'polyglots' => array(
 			'Amieiro',
@@ -474,7 +490,17 @@ function get_whitelist() {
 			'tobifjellner',
 			'tokyobiyori',
 		),
-		'themereview' => array(
+		'polyglots-multilingual-community' => array(
+			'courane01', // @Courtney on Slack
+			'estelaris',
+		),
+		'sustainability' => array(
+			'littlebigthing', // @Csaba on Slack
+			'nahuai', // @Nahuai Badiola on Slack
+			'noradriana', // @Nora Ferreirós on Slack
+			'yellowlime', // @Thijs Buijs on Slack
+		),
+		'themes' => array(
 			'acalfieri',
 			'acosmin',
 			'aristath',
@@ -503,7 +529,6 @@ function get_whitelist() {
 			'annezazu',
 			'arasae', // @Sarah (She/Her) on Slack
 			'azhiyadev', // @Hauwa Abashiya on Slack
-			'bsanevans',
 			'chanthaboune',
 			'chetan200891',
 			'chrisbadgett',
@@ -511,12 +536,14 @@ function get_whitelist() {
 			'colorful tones', // @colorful-tones on Slack
 			'courane01', // @Courtney on Slack
 			'courtneypk',
+			'devmuhib', // @Muhibul Haque on Slack
 			'digitalchild',
 			'eboxnet',
 			'fikekomala',
 			'hardeepasrani',
 			'jessecowens', // @Jesse Owens on Slack
 			'juliekuehl',
+			'kaitohm',
 			'lada7042',
 			'meaganhanes',
 			'mrfoxtalbot',

@@ -74,16 +74,23 @@ function wporg_login_create_pending_user( $user_login, $user_email, $meta = arra
 	$profile_key        = wp_generate_password( 24, false, false );
 	$hashed_profile_key = time() . ':' . wp_hash_password( $profile_key );
 
+	$source = $_COOKIE['wporg_came_from'] ?? '';
+	if ( $source ) {
+		$source = remove_query_arg( [ 'SAMLRequest', 'RelayState' ], $source );
+	}
+
 	$pending_user = array(
-		'user_login' => $user_login,
-		'user_email' => $user_email,
-		'user_registered' => gmdate('Y-m-d  H:i:s'),
+		'user_login'          => $user_login,
+		'user_email'          => $user_email,
+		'user_registered'     => gmdate('Y-m-d  H:i:s'),
 		'user_activation_key' => '',
-		'user_profile_key' => $hashed_profile_key,
-		'meta' => $meta + array(
-			'registration_ip'  => $_SERVER['REMOTE_ADDR'], // Spam & fraud control. Will be discarded after the account is created.
+		'user_profile_key'    => $hashed_profile_key,
+		'meta'                => $meta + array(
+			'registration_ip'         => $_SERVER['REMOTE_ADDR'], // Spam & fraud control. Will be discarded after the account is created.
+			'registration_ip_country' => ( is_callable( 'WordPressdotorg\GeoIP\query' ) ? \WordPressdotorg\GeoIP\query( $_SERVER['REMOTE_ADDR'], 'country_short' ) : '' ),
+			'source'                  => $source,
 		),
-		'scores' => array(
+		'scores'              => array(
 			'pending' => 1,
 		),
 		'cleared' => 0,
@@ -107,18 +114,23 @@ function wporg_login_create_pending_user( $user_login, $user_email, $meta = arra
 		$pending_user['meta']['heuristics'] = wporg_registration_check_private_heuristics( compact( 'user_login', 'user_email' ) );
 	}
 
-	$passes_block_words = wporg_login_check_against_block_words( $pending_user );
+	$passes_heuristics  = 'allow' === $pending_user['meta']['heuristics'];
+	$passes_recaptcha   = (float)$pending_user['scores']['pending'] >= (float) get_option( 'recaptcha_v3_threshold', 0.2 );
+	$has_blocked_word   = wporg_login_has_blocked_word( $pending_user );
+	$passes_block_words = ! $has_blocked_word;
+
+	if ( ! $passes_block_words ) {
+		$pending_user['meta']['block_reason'] ??= [ 'Block words', "{$has_blocked_word} found" ];
+	}
+	if ( ! $passes_recaptcha ) {
+		$pending_user['meta']['block_reason'] ??= 'reCaptcha not met';
+	}
 
 	$pending_user['cleared'] = (
-		'allow' === $pending_user['meta']['heuristics'] &&
-		(float)$pending_user['scores']['pending'] >= (float) get_option( 'recaptcha_v3_threshold', 0.2 ) &&
+		$passes_heuristics &&
+		$passes_recaptcha &&
 		$passes_block_words
 	);
-
-	// Run a filter on the cleared status..
-	if ( ! apply_filters( 'wporg_login_registration_check_user', true, $pending_user ) ) {
-		$pending_user['cleared'] = false;
-	}
 
 	$inserted = wporg_update_pending_user( $pending_user );
 	if ( ! $inserted ) {
@@ -190,24 +202,34 @@ function wporg_login_send_confirmation_email( $user ) {
 
 /**
  * Fetches a pending user record from the database by username or Email.
+ *
+ * @param string|int $who The username, email address, or user ID.
  */
-function wporg_get_pending_user( $login_or_email ) {
+function wporg_get_pending_user( $who ) {
 	global $wpdb;
 
 	// Is it a pending user object already?
-	if ( is_array( $login_or_email ) && isset( $login_or_email['pending_id'] ) ) {
-		return $login_or_email;
+	if ( is_array( $who ) && isset( $who['pending_id'] ) ) {
+		return $who;
 	}
 
-	$login_or_email = trim( $login_or_email );
-	if ( ! $login_or_email ) {
+	if ( is_numeric( $who ) && (int) $who == $who ) {
+		$field = 'pending_id';
+	} elseif ( str_contains( $who, '@' ) ) {
+		$field = 'user_email';
+	} else {
+		$field = 'user_login';
+	}
+
+	$who = trim( $who );
+	if ( ! $who ) {
 		return false;
 	}
 
 	$pending_user = $wpdb->get_row( $wpdb->prepare(
-		"SELECT * FROM `{$wpdb->base_prefix}user_pending_registrations` WHERE ( `user_login` = %s OR `user_email` = %s ) LIMIT 1",
-		$login_or_email,
-		$login_or_email
+		"SELECT * FROM `{$wpdb->base_prefix}user_pending_registrations` WHERE %i = %s LIMIT 1",
+		$field,
+		$who
 	), ARRAY_A );
 
 	if ( ! $pending_user ) {
@@ -252,6 +274,10 @@ function wporg_get_pending_user_by_email_wildcard( $email ) {
  */
 function wporg_update_pending_user( $pending_user ) {
 	global $wpdb;
+
+	// Allow altering the user fields.
+	$pending_user = apply_filters( 'wporg_login_registration_update_pending_user', $pending_user );
+
 	$pending_user['meta']   = json_encode( $pending_user['meta'] );
 	$pending_user['scores'] = json_encode( $pending_user['scores'] );
 
@@ -282,6 +308,19 @@ function wporg_delete_pending_user( $pending_user ) {
 		"{$wpdb->base_prefix}user_pending_registrations",
 		array( 'pending_id' => $pending_user['pending_id'] )
 	);
+}
+
+/**
+ * Update BuddyPress xProfile data.
+ * 
+ * @param int    $user_id    The ID of the user.
+ * @param string $field_name The name of the field to update.
+ * @param mixed  $value      The value to set for the field.
+ */
+function wporg_update_user_profile_fields( $user_id, $field_name, $value ) {
+	if ( function_exists( 'WordPressdotorg\Profiles\update_profile' ) ) {
+		WordPressdotorg\Profiles\update_profile( $field_name, $value, $user_id );
+	}
 }
 
 /**
@@ -318,9 +357,10 @@ function wporg_login_create_user_from_pending( $pending_user, $password = false 
 	) );
 
 	// Update the pending record with the new details.
-	$pending_user['created'] = 1;
-	$pending_user['created_date'] = gmdate( 'Y-m-d H:i:s' );
-	$pending_user['meta']['confirmed_ip'] = $_SERVER['REMOTE_ADDR']; // Spam/Fraud purposes, will be deleted once not needed.
+	$pending_user['created']                      = 1;
+	$pending_user['created_date']                 = gmdate( 'Y-m-d H:i:s' );
+	$pending_user['meta']['confirmed_ip']         = $_SERVER['REMOTE_ADDR'];
+	$pending_user['meta']['confirmed_ip_country'] = ( is_callable( 'WordPressdotorg\GeoIP\query' ) ? \WordPressdotorg\GeoIP\query( $_SERVER['REMOTE_ADDR'], 'country_short' ): '' );
 
 	// reCaptcha v3 logging.
 	if ( isset( $_POST['_reCaptcha_v3_token'] ) ) {
@@ -345,19 +385,28 @@ function wporg_login_create_user_from_pending( $pending_user, $password = false 
 	foreach ( array( 'url', 'from', 'occ', 'interests', $tos_meta_key ) as $field ) {
 		if ( !empty( $pending_user['meta'][ $field ] ) ) {
 			$value = $pending_user['meta'][ $field ];
-			if ( 'url' == $field ) {
-				wp_update_user( array( 'ID' => $user_id, 'user_url' => $value ) );
 
-				// Update BuddyPress xProfile data.
-				if ( function_exists( 'WordPressdotorg\Profiles\update_profile' ) ) {
-					WordPressdotorg\Profiles\update_profile( 'Website URL', $value, $user_id );
-				}
+			// Map to xProfile labels.
+			$profile_labels = [
+				'url' => 'Website URL',
+				'from' => 'Current Location',
+				'occ' => 'Job Title',
+				'interests' => 'Interests',
+			];
+
+			if( 'url' == $field ) {
+				wp_update_user( [ 'ID' => $user_id, 'user_url' => $value ] );
 			} else {
 				if ( $value ) {
 					update_user_meta( $user_id, $field, $value );
 				} else {
 					delete_user_meta( $user_id, $field );
 				}
+			}
+
+			// Update the xprofile field.
+			if ( isset( $profile_labels[$field] ) ) {
+				wporg_update_user_profile_fields( $user_id, $profile_labels[$field], $value );
 			}
 		}
 	}
@@ -439,16 +488,12 @@ function wporg_login_save_profile_fields( $pending_user = false, $state = '' ) {
 		}
 	}
 
-	// If not manually approved, check against block_words, and any other registration checks that are hooked in.
-	if ( $pending_user['cleared'] < 2 ) {
-		$passes_block_words = wporg_login_check_against_block_words( $pending_user );
-		if ( ! $passes_block_words ) {
-			$pending_user['cleared'] = 0;
-		}
-
-		// Check the filter.
-		if ( ! apply_filters( 'wporg_login_registration_check_user', true, $pending_user ) ) {
-			$pending_user['cleared'] = 0;
+	// If approved (1), and not manually approved (2), perform the check with the new data.
+	if ( $pending_user['cleared'] === 1 ) {
+		$has_blocked_word = wporg_login_has_blocked_word( $pending_user );
+		if ( $has_blocked_word ) {
+			$pending_user['cleared']                = 0;
+			$pending_user['meta']['block_reason'] ??= [ 'Block words', "{$has_blocked_word} found" ];
 		}
 	}
 
@@ -465,9 +510,9 @@ function wporg_login_save_profile_fields( $pending_user = false, $state = '' ) {
 /**
  * Check a pending user object against the 'block words' setting.
  * 
- * @return bool
+ * @return bool|string false if no block words found, or the first block word found.
  */
-function wporg_login_check_against_block_words( $user ) {
+function wporg_login_has_blocked_word( $user ) {
 	$block_words = get_option( 'registration_block_words', [] );
 
 	foreach ( $block_words as $word ) {
@@ -475,7 +520,7 @@ function wporg_login_check_against_block_words( $user ) {
 			false !== stripos( $user['user_login'], $word ) ||
 			false !== stripos( $user['user_email'], $word )
 		) {
-			return false;
+			return $word;
 		}
 
 		foreach ( [ 'url', 'from', 'occ', 'interests' ] as $field ) {
@@ -483,10 +528,10 @@ function wporg_login_check_against_block_words( $user ) {
 				! empty( $user['meta'][ $field ] ) &&
 				false !== stripos( $user['meta'][ $field ], $word )
 			) {
-				return false;
+				return $word;
 			}
 		}
 	}
 
-	return true;
+	return false;
 }

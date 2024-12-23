@@ -7,11 +7,10 @@ use WordPressdotorg\Plugin_Directory\Jobs\Tide_Sync;
 use WordPressdotorg\Plugin_Directory\Block_JSON;
 use WordPressdotorg\Plugin_Directory\Plugin_Directory;
 use WordPressdotorg\Plugin_Directory\Email\Release_Confirmation as Release_Confirmation_Email;
-use WordPressdotorg\Plugin_Directory\Readme\Parser;
+use WordPressdotorg\Plugin_Directory\Readme\{ Parser as Readme_Parser, Validator as Readme_Validator };
 use WordPressdotorg\Plugin_Directory\Standalone\Plugins_Info_API;
 use WordPressdotorg\Plugin_Directory\Template;
 use WordPressdotorg\Plugin_Directory\Tools;
-use WordPressdotorg\Plugin_Directory\Tools\Block_e2e;
 use WordPressdotorg\Plugin_Directory\Tools\Filesystem;
 use WordPressdotorg\Plugin_Directory\Tools\SVN;
 use WordPressdotorg\Plugin_Directory\Zip\Builder;
@@ -28,7 +27,6 @@ class Import {
 
 	// Readme fields which get stored in plugin meta
 	public $readme_fields = array(
-		'tested',
 		'donate_link',
 		'license',
 		'license_uri',
@@ -36,6 +34,7 @@ class Import {
 		'screenshots',
 
 		// These headers are stored as post meta, but are handled separately.
+		// 'tested',
 		// 'requires',
 		// 'requires_php',
 	);
@@ -57,16 +56,34 @@ class Import {
 	);
 
 	/**
+	 * List of warnings generated during the import process.
+	 *
+	 * @var array
+	 */
+	public $warnings = array();
+
+	/**
+	 * The last plugin imported.
+	 *
+	 * @var \WP_Post
+	 */
+	public $plugin;
+
+	/**
 	 * Process an import for a Plugin into the Plugin Directory.
 	 *
 	 * @throws \Exception
 	 *
 	 * @param string $plugin_slug            The slug of the plugin to import.
 	 * @param array  $svn_changed_tags       A list of tags/trunk which the SVN change touched. Optional.
+	 * @param array  $svn_tags_deleted       A list of tags/trunk which were deleted in the SVN change. Optional.
 	 * @param array  $svn_revision_triggered The SVN revision which this import has been triggered by. Optional.
 	 */
-	public function import_from_svn( $plugin_slug, $svn_changed_tags = array( 'trunk' ), $svn_revision_triggered = 0 ) {
-		$plugin = Plugin_Directory::get_plugin_post( $plugin_slug );
+	public function import_from_svn( $plugin_slug, $svn_changed_tags = array( 'trunk' ), $svn_tags_deleted = array(), $svn_revision_triggered = 0 ) {
+		// Reset properties.
+		$this->warnings = [];
+
+		$plugin = $this->plugin = Plugin_Directory::get_plugin_post( $plugin_slug );
 		if ( ! $plugin ) {
 			throw new Exception( 'Unknown Plugin' );
 		}
@@ -76,6 +93,7 @@ class Import {
 		$readme             = $data['readme'];
 		$assets             = $data['assets'];
 		$headers            = $data['plugin_headers'];
+		$version            = $headers->Version ?? '';
 		$stable_tag         = $data['stable_tag'];
 		$last_committer     = $data['last_committer'];
 		$last_revision      = $data['last_revision'];
@@ -85,6 +103,25 @@ class Import {
 		$block_files        = $data['block_files'];
 		$current_stable_tag = get_post_meta( $plugin->ID, 'stable_tag', true ) ?: 'trunk';
 		$touches_stable_tag = (bool) array_intersect( [ $stable_tag, $current_stable_tag ], $svn_changed_tags );
+
+		// If the readme generated any warnings, raise it to self::$import_warnings;
+		if ( $readme->warnings ) {
+			$this->warnings = array_merge( $this->warnings, $readme->warnings );
+		}
+
+		/**
+		 * Fire an import action, now that we've exported most of the plugin data.
+		 *
+		 * NOTE: This is prior to any validation checks.
+		 *
+		 * @param Import  $this                   The Plugin Importer object.
+		 * @param WP_Post $plugin                 The plugin being imported.
+		 * @param array   $data                   The data from the import process.
+		 * @param array   $svn_changed_tags       The list of SVN tags/trunk affected to trigger the import.
+		 * @param array   $svn_tags_deleted       The list of SVN tags/trunk deleted in the import.
+		 * @param int     $svn_revision_triggered The SVN revision that triggered the import.
+		 */
+		do_action( 'wporg_plugins_import', $this, $plugin, $data, $svn_changed_tags, $svn_tags_deleted, $svn_revision_triggered );
 
 		// Validate various headers:
 
@@ -98,12 +135,54 @@ class Import {
 		if ( $headers->UpdateURI ) {
 			$update_uri_valid = preg_match( '!^(https?://)?(wordpress.org|w.org)/plugins?/(?P<slug>[^/]+)/?$!i', $headers->UpdateURI, $update_uri_matches );
 			if ( ! $update_uri_valid || $update_uri_matches['slug'] !== $plugin_slug ) {
-				throw new Exception( 'Invalid Update URI header detected: ' . $headers->UpdateURI );
+				$this->warnings['invalid_update_uri'] = $headers->UpdateURI;
+
+				throw new Exception( Readme_Validator::instance()->translate_code_to_message( 'invalid_update_uri' ) );
+			}
+		}
+
+		$_requires_plugins = array_filter( array_map( 'trim', explode( ',', $headers->RequiresPlugins ) ) );
+		$requires_plugins     = [];
+		$unmet_dependencies   = [];
+		foreach ( $_requires_plugins as $requires_plugin_slug ) {
+			$requires_plugin_post = Plugin_Directory::get_plugin_post( $requires_plugin_slug );
+
+			// get_plugin_post() will resolve some edge-cases, but we only want exact slug-matches, anything else is wrong.
+			if (
+				$requires_plugin_post &&
+				$requires_plugin_slug === $requires_plugin_post->post_name &&
+				'publish' === $requires_plugin_post->post_status
+			) {
+				$requires_plugins[] = $requires_plugin_post->post_name;
+			} else {
+				$unmet_dependencies[] = $requires_plugin_slug;
+			}
+		}
+
+		if ( $unmet_dependencies ) {
+			$this->warnings['unmet_dependencies'] = $unmet_dependencies;
+
+			throw new Exception( Readme_Validator::instance()->translate_code_to_message( 'unmet_dependencies', $unmet_dependencies ) );
+		}
+		unset( $_requires_plugins, $unmet_dependencies );
+
+		/*
+		 * If a tag has been deleted, we should also remove any unconfirmed releases.
+		 * NOTE: remove_release() will not remove a confirmed release, but will remove a discarded release.
+		 *
+		 * Additionally; this must occur before the below release confirmation checks,
+		 * if the trunk readme has it's stable_tag set to one of these deleted (now non-existent) tags,
+		 * then $stable_tag will be set to the fallback 'trunk', causing the RC checks to fail.
+		 */
+		foreach ( $svn_tags_deleted as $svn_deleted_tag ) {
+			if ( Plugin_Directory::remove_release( $plugin, $svn_deleted_tag ) ) {
+				echo "Plugin tag {$svn_deleted_tag} deleted; release removed.\n";
 			}
 		}
 
 		// Release confirmation
 		if ( $plugin->release_confirmation ) {
+			// If the stable tag is trunk, we shouldn't continue, as we don't support that for RC.
 			if ( 'trunk' === $stable_tag ) {
 				throw new Exception( 'Plugin cannot be released from trunk due to release confirmation being enabled.' );
 			}
@@ -117,26 +196,38 @@ class Import {
 				$release = Plugin_Directory::get_release( $plugin, $svn_changed_tag );
 				if ( ! $release ) {
 					// Use the actual version for stable releases, otherwise fallback to the tag name, as we don't have the actual header data.
-					$version = ( $svn_changed_tag === $stable_tag ) ? $headers->Version : $svn_changed_tag;
+					$release_version = ( $svn_changed_tag === $stable_tag ) ? $version : $svn_changed_tag;
 
 					Plugin_Directory::add_release(
 						$plugin,
 						[
 							'tag'       => $svn_changed_tag,
-							'version'   => $version,
+							'version'   => $release_version,
 							'committer' => [ $last_committer ],
 							'revision'  => [ $last_revision ]
 						]
 					);
 
+					/*
+					 * Trigger the release confirmation email.
+					 *
+					 * This goes to ALL committers, including who commited the change.
+					 * "bot" accounts are NOT emailed, nor are accounts that have web login disabled.
+					 */
+					$who_to_email = array_diff(
+						Tools::get_plugin_committers( $plugin_slug ),
+						$GLOBALS['bot_accounts'] ?? [],
+						$GLOBALS['nologin_accounts'] ?? []
+					);
+
 					$email = new Release_Confirmation_Email(
 						$plugin,
-						Tools::get_plugin_committers( $plugin_slug ),
+						$who_to_email,
 						[
 							'who'     => $last_committer,
 							'readme'  => $readme,
 							'headers' => $headers,
-							'version' => $version,
+							'version' => $release_version,
 						]
 					);
 					$email->send();
@@ -157,16 +248,26 @@ class Import {
 			 * then we need to build a new zip for that tag.
 			 *
 			 * This is required as ZIP building occurs at the end of the import process, yet with
-			 * release confirmations the 
+			 * release confirmations that will not be reached when the release isn't yet confirmed.
 			 */
 			if ( ! $release['confirmed'] && ! $touches_stable_tag ) {
 				$zips_to_build = [];
 				foreach ( $svn_changed_tags as $svn_changed_tag ) {
-					// We're not concerned with trunk or stable tags.
-					if ( 'trunk' === $svn_changed_tag || $svn_changed_tag === $stable_tag ) {
+					// Never build the stable tag zips here.
+					if ( $svn_changed_tag === $stable_tag ) {
 						continue;
 					}
 
+					// Always allow trunk to be rebuilt.
+					if ( 'trunk' === $svn_changed_tag ) {
+						$zips_to_build[] = 'trunk';
+						continue;
+					}
+
+					/*
+					 * If the tag is confirmed, but the zips haven't been built, then build them.
+					 * This can be a confirmed release, but one which isn't set as stable.
+					 */
 					$this_release = Plugin_Directory::get_release( $plugin, $svn_changed_tag );
 					if ( $this_release['confirmed'] && ! $this_release['zips_built'] ) {
 						$zips_to_build[] = $this_release['tag'];
@@ -179,8 +280,8 @@ class Import {
 				}
 			}
 
-			// Check that the tag is approved.
-			if ( ! $release['confirmed'] ) {
+			// Check that the tag is approved (If the release needed to be confirmed).
+			if ( ! $release['confirmed'] && $release['confirmations_required'] ) {
 
 				if ( ! in_array( $last_committer, $release['committer'], true ) ) {
 					$release['committer'][] = $last_committer;
@@ -192,11 +293,35 @@ class Import {
 				// Update with ^
 				Plugin_Directory::add_release( $plugin, $release );
 
+				/**
+				 * Fire an action to let other code know this plugin has a pending release.
+				 *
+				 * @param WP_Post $plugin  The plugin being imported.
+				 * @param array   $release The release data.
+				 * @param array   $data    The data from the import process.
+				 */
+				do_action( 'wporg_plugins_import_release_pending', $plugin, $release, $data );
+
 				throw new Exception( "Plugin release {$stable_tag} not confirmed." );
 			}
 
 			// At this point we can assume that the release was confirmed, and should be imported.
 		}
+
+		/**
+		 * Fire an import action, now that we've exported the plugin data, and validates that it's ready for release.
+		 *
+		 * NOTE: This fires after Release Confirmation, such that the plugin is 100% ready to be released.
+		 *
+		 * @param Import  $this                   The Plugin Importer object.
+		 * @param WP_Post $plugin                 The plugin being imported.
+		 * @param array   $release                The release data. Only present if the plugin uses Release Confirmation.
+		 * @param array   $data                   The data from the import process.
+		 * @param array   $svn_changed_tags       The list of SVN tags/trunk affected to trigger the import.
+		 * @param array   $svn_tags_deleted       The list of SVN tags/trunk deleted in the import.
+		 * @param int     $svn_revision_triggered The SVN revision that triggered the import.
+		 */
+		do_action( 'wporg_plugins_import_process', $this, $plugin, $release ?? false, $data, $svn_changed_tags, $svn_tags_deleted, $svn_revision_triggered );
 
 		$content = '';
 		if ( $readme->sections ) {
@@ -227,7 +352,7 @@ class Import {
 		 * - A tag (or trunk) commit is made to the current stable. The build has changed, even if not new version.
 		 */
 		if (
-			( ! isset( $headers->Version ) || $headers->Version != get_post_meta( $plugin->ID, 'version', true ) ) ||
+			( ! $version || $version != get_post_meta( $plugin->ID, 'version', true ) ) ||
 			$plugin->post_modified == '0000-00-00 00:00:00' ||
 			( $svn_changed_tags && in_array( ( $stable_tag ?: 'trunk' ), $svn_changed_tags, true ) )
 		) {
@@ -270,21 +395,9 @@ class Import {
 			wp_remove_object_terms( $plugin->ID, 'adopt-me', 'plugin_section' );
 		}
 
-		// Update the tested-up-to value
-		$tested = $readme->tested;
-		if ( function_exists( 'wporg_get_version_equivalents' ) ) {
-			foreach ( wporg_get_version_equivalents() as $latest_compatible_version => $compatible_with ) {
-				if ( in_array( $readme->tested, $compatible_with, true ) ) {
-					$tested = $latest_compatible_version;
-					break;
-				}
-			}
-		}
-
 		// Update all readme meta
 		foreach ( $this->readme_fields as $readme_field ) {
-			$value = ( 'tested' == $readme_field ) ? $tested : $readme->$readme_field;
-			update_post_meta( $plugin->ID, $readme_field, wp_slash( $value ) );
+			update_post_meta( $plugin->ID, $readme_field, wp_slash( $readme->$readme_field ) );
 		}
 
 		// Store the plugin headers we need. Note that 'Version', 'RequiresWP', and 'RequiresPHP' are handled below.
@@ -292,15 +405,29 @@ class Import {
 			update_post_meta( $plugin->ID, $meta_field, ( isset( $headers->$plugin_header ) ? wp_slash( $headers->$plugin_header ) : '' ) );
 		}
 
-		// Update the Requires and Requires PHP fields, prefering those from the Plugin Headers.
+		// Update the Requires, Requires PHP, and Tested up to fields, prefering those from the Plugin Headers.
 		// Unfortunately the value within $headers is not always a well-formed value.
 		$requires     = $readme->requires;
 		$requires_php = $readme->requires_php;
+		$tested       = $readme->tested;
 		if ( $headers->RequiresWP && preg_match( '!^[\d.]{3,}$!', $headers->RequiresWP ) ) {
 			$requires = $headers->RequiresWP;
 		}
 		if ( $headers->RequiresPHP && preg_match( '!^[\d.]{3,}$!', $headers->RequiresPHP ) ) {
 			$requires_php = $headers->RequiresPHP;
+		}
+		if ( $headers->TestedUpTo && preg_match( '!^[\d.]{3,}$!', $headers->TestedUpTo ) ) {
+			$tested = $headers->TestedUpTo;
+		}
+
+		// Sanitize the tested version.
+		if ( function_exists( 'wporg_get_version_equivalents' ) ) {
+			foreach ( wporg_get_version_equivalents() as $latest_compatible_version => $compatible_with ) {
+				if ( in_array( $tested, $compatible_with, true ) ) {
+					$tested = $latest_compatible_version;
+					break;
+				}
+			}
 		}
 
 		// Keep a log of all plugin names used by the plugin over time.
@@ -311,32 +438,10 @@ class Import {
 			update_post_meta( $plugin->ID, 'plugin_name_history', wp_slash( $plugin_names ) );
 		}
 
-		// Validate whether the dependencies are met by WordPress.org-hosted plugins.
-		$requires_plugins       = array_filter( array_map( 'trim', explode( ',', $headers->RequiresPlugins ) ) );
-		$requires_plugins_unmet = false;
-		foreach ( $requires_plugins as $requires_plugin_slug ) {
-			// TODO: Add support for premium plugins.
-			$requires_plugin_post = Plugin_Directory::get_plugin_post( $requires_plugin_slug );
-			if (
-				! $requires_plugin_post ||
-				// get_plugin_post() will resolve some edge-cases, but we only want exact slug-matches.
-				$requires_plugin_slug !== $requires_plugin_post->post_name ||
-				'publish' !== $requires_plugin_post->post_status
-			) {
-				$requires_plugins_unmet = true;
-				break;
-			}
-		}
-
-		update_post_meta( $plugin->ID, 'requires_plugins', wp_slash( $requires_plugins ) );
-		if ( $requires_plugins_unmet ) {
-			update_post_meta( $plugin->ID, '_requires_plugins_unmet', true );
-		} else {
-			delete_post_meta( $plugin->ID, '_requires_plugins_unmet' );
-		}
-
+		update_post_meta( $plugin->ID, 'requires_plugins',   wp_slash( $requires_plugins ) );
 		update_post_meta( $plugin->ID, 'requires',           wp_slash( $requires ) );
 		update_post_meta( $plugin->ID, 'requires_php',       wp_slash( $requires_php ) );
+		update_post_meta( $plugin->ID, 'tested',             wp_slash( $tested ) );
 		update_post_meta( $plugin->ID, 'tagged_versions',    wp_slash( array_keys( $tagged_versions ) ) );
 		update_post_meta( $plugin->ID, 'sections',           wp_slash( array_keys( $readme->sections ) ) );
 		update_post_meta( $plugin->ID, 'assets_screenshots', wp_slash( $assets['screenshot'] ) );
@@ -357,6 +462,8 @@ class Import {
 			update_post_meta( $plugin->ID, 'assets_blueprints', wp_slash( $assets['blueprint'] ) );
 		} else {
 			delete_post_meta( $plugin->ID, 'assets_blueprints' );
+			// TODO: maybe if ( $touches_stable_tag )?
+			add_post_meta( $plugin->ID, '_missing_blueprint_notice', 1, true );
 		}
 
 		// Store the block data, if known
@@ -365,9 +472,10 @@ class Import {
 			if ( $changed || count ( get_post_meta( $plugin->ID, 'block_name' ) ) !== count ( $blocks ) ) {
 				delete_post_meta( $plugin->ID, 'block_name' );
 				delete_post_meta( $plugin->ID, 'block_title' );
+
 				foreach ( $blocks as $block ) {
 					add_post_meta( $plugin->ID, 'block_name', $block->name, false );
-					add_post_meta( $plugin->ID, 'block_title', ( $block->title ?: $plugin->post_title ), false );
+					add_post_meta( $plugin->ID, 'block_title', $block->title, false );
 				}
 			}
 		} else {
@@ -383,11 +491,35 @@ class Import {
 			delete_post_meta( $plugin->ID, 'block_files' );
 		}
 
+		// Add the release to storage.
+		if ( 'trunk' != $stable_tag ) {
+			Plugin_Directory::add_release(
+				$plugin,
+				[
+					'tag'       => $stable_tag,
+					'version'   => $version,
+					'committer' => [ $last_committer ],
+					'revision'  => [ $last_revision ]
+				]
+			);
+		} elseif ( 'trunk' === $stable_tag && version_compare( $version, $plugin->version, '>' ) ) {
+			// This is a new version, released from trunk.
+			Plugin_Directory::add_release(
+				$plugin,
+				[
+					'tag'       => "trunk@{$version}",
+					'version'   => $version,
+					'committer' => [ $last_committer ],
+					'revision'  => [ $last_revision ]
+				]
+			);
+		}
+
 		$this->rebuild_affected_zips( $plugin_slug, $stable_tag, $current_stable_tag, $svn_changed_tags, $svn_revision_triggered );
 
 		// Finally, set the new version live.
 		update_post_meta( $plugin->ID, 'stable_tag', wp_slash( $stable_tag ) );
-		update_post_meta( $plugin->ID, 'version',    wp_slash( $headers->Version ) );
+		update_post_meta( $plugin->ID, 'version',    wp_slash( $version ) );
 		// Update the list of tags last, as it controls which ZIPs are present in the 'Previous versions' section and info API.
 		update_post_meta( $plugin->ID, 'tags',       wp_slash( $tagged_versions ) );
 
@@ -398,11 +530,6 @@ class Import {
 		// Import Tide data
 		Tide_Sync::sync_data( $plugin->post_name );
 
-		// Run the Block Directory e2e tests if applicable.
-		if ( has_term( 'block', 'plugin_section', $plugin->ID ) ) {
-			Block_e2e::run( $plugin->post_name );
-		}
-
 		/**
 		 * Action that fires after a plugin is imported.
 		 *
@@ -411,8 +538,9 @@ class Import {
 		 * @param string  $old_stable_tag The previous stable tag for the plugin.
 		 * @param array   $changed_tags   The list of SVN tags/trunk affected to trigger the import.
 		 * @param int     $svn_revision   The SVN revision that triggered the import.
+		 * @param array   $warnings       The list of warnings generated during the import process.
 		 */
-		do_action( 'wporg_plugins_imported', $plugin, $stable_tag, $current_stable_tag, $svn_changed_tags, $svn_revision_triggered );
+		do_action( 'wporg_plugins_imported', $plugin, $stable_tag, $current_stable_tag, $svn_changed_tags, $svn_revision_triggered, $this->warnings );
 
 		return true;
 	}
@@ -457,9 +585,6 @@ class Import {
 					( $release['zips_built'] && $release['confirmations_required'] )
 				) {
 					unset( $versions_to_build[ $i ] );
-				} else {
-					$release['zips_built'] = true;
-					Plugin_Directory::add_release( $plugin, $release );
 				}
 			}
 
@@ -486,6 +611,22 @@ class Import {
 			);
 		} catch ( Exception $e ) {
 			return false;
+		}
+
+		// Mark the ZIPs as being built.
+		foreach ( $versions_to_build as $tag ) {
+			if ( 'trunk' === $tag ) {
+				continue;
+			}
+
+			Plugin_Directory::add_release(
+				$plugin,
+				[
+					'tag'                      => $tag,
+					'zips_built'               => true,
+					'zips_built_from_revision' => ( $zip_builder->plugins_revision ?? 0 ) ?: $svn_revision_triggered,
+				]
+			);
 		}
 
 		return true;
@@ -563,7 +704,7 @@ class Import {
 			}
 
 			$trunk_readme_file = self::PLUGIN_SVN_BASE . "/{$plugin_slug}/trunk/{$trunk_readme_file}";
-			$trunk_readme      = new Parser( $trunk_readme_file );
+			$trunk_readme      = new Readme_Parser( $trunk_readme_file );
 
 			$stable_tag = $trunk_readme->stable_tag;
 		}
@@ -586,11 +727,17 @@ class Import {
 			}
 		}
 
+		// Fall back to using `trunk` as stable, if the tag doesn't exist.
 		if ( ! $svn_info || ! $svn_info['result'] ) {
-            $stable_tag = 'trunk';
-            $stable_url = self::PLUGIN_SVN_BASE . "/{$plugin_slug}/trunk";
-            $svn_info   = SVN::info( $stable_url );
-        }
+			if ( 'trunk' !== $stable_tag ) {
+				$this->warnings['stable_tag_invalid_trunk_fallback'] = $stable_tag;
+				$this->warnings['stable_tag_invalid']                = true;
+			}
+
+			$stable_tag = 'trunk';
+			$stable_url = self::PLUGIN_SVN_BASE . "/{$plugin_slug}/trunk";
+			$svn_info   = SVN::info( $stable_url );
+		}
 
 		if ( ! $svn_info['result'] ) {
 			throw new Exception( 'Could not find stable SVN URL: ' . implode( ' ', reset( $svn_info['errors'] ) ) );
@@ -623,7 +770,7 @@ class Import {
 
 		// The readme may not actually exist, but that's okay.
 		$readme = $this->find_readme_file( $tmp_dir . '/export' );
-		$readme = new Parser( $readme );
+		$readme = new Readme_Parser( $readme );
 
 		// There must be valid plugin headers though.
 		$plugin_headers = $this->find_plugin_headers( "$tmp_dir/export" );
@@ -801,9 +948,23 @@ class Import {
 			}
 		}
 
-		foreach ( $blocks as $block_name => $block ) {
+		// Set the fallback name for the blocks.
+		foreach ( $blocks as $block_name => &$block ) {
 			if ( empty( $block->title ) ) {
-				$blocks[ $block_name ]->title = $readme->name;
+				$block->title = $block_name;
+				// If the block duplicates the namespace, remove it. 'plugin-slug/plugin-slug-block-name'
+				$block->title = preg_replace( '#^([^/]+)/\\1-?#i', '$1/', $block->title );
+				// If the namespace is the slug (w/ or w/o dashes..), remove it.
+				if (
+					str_starts_with( $block->title, $plugin_slug . '/' ) ||
+					str_starts_with( $block->title, str_replace( '-', '', $plugin_slug ) . '/' )
+				) {
+					$block->title = explode( '/', $block->title, 2 )[1];
+				}
+				// Treat any non-wordy characters as spaces.
+				$block->title = preg_replace( '/[^a-z]+/', ' ', $block->title );
+				// Capitalise all words.
+				$block->title = ucwords( $block->title );
 			}
 		}
 
@@ -851,7 +1012,12 @@ class Import {
 			return preg_match( '!\.(?:js|jsx|css)$!i', $filename );
 		} ) );
 
-		return compact( 'readme', 'stable_tag', 'last_modified', 'last_committer', 'last_revision', 'tmp_dir', 'plugin_headers', 'assets', 'tagged_versions', 'blocks', 'block_files' );
+		return apply_filters(
+			'wporg_plugins_export_and_parse_plugin',
+			compact( 'readme', 'stable_tag', 'last_modified', 'last_committer', 'last_revision', 'tmp_dir', 'plugin_headers', 'assets', 'tagged_versions', 'blocks', 'block_files' ),
+			$plugin_slug,
+			$this,
+		);
 	}
 
 	/**
@@ -944,6 +1110,10 @@ class Import {
 		if ( ! isset( $headers['RequiresPlugins'] ) ) {
 			$headers['RequiresPlugins'] = 'Requires Plugins';
 		}
+		// https://meta.trac.wordpress.org/ticket/4621
+		if ( ! isset( $headers['TestedUpTo'] ) ) {
+			$headers['TestedUpTo'] = 'Tested up to';
+		}
 
 		return $headers;
 	}
@@ -965,28 +1135,43 @@ class Import {
 			// Parse a js-style registerBlockType() call.
 			// Note that this only works with literal strings for the block name and title, and assumes that order.
 			$contents = file_get_contents( $filename );
-			if ( $contents && preg_match_all( "#registerBlockType[^{}]{0,500}[(]\s*[\"']([-\w]+/[-\w]+)[\"']\s*,\s*[{]\s*title\s*:[\s\w(]*[\"']([^\"']*)[\"']#ms", $contents, $matches, PREG_SET_ORDER ) ) {
+			if ( $contents && preg_match_all( "#registerBlockType[^{}]{0,500}[(]\s*[\"']([-\w]+/[-\w]+)[\"']\s*,\s*[{][^;]{0,500}?\s*title\s*:[\s\w(.]*[\"']([^\"']*)[\"'](?!\s*[+])#ms", $contents, $matches, PREG_SET_ORDER ) ) {
 				foreach ( $matches as $match ) {
 					$blocks[] = (object) [
-						'name' => $match[1],
+						'name'  => $match[1],
 						'title' => $match[2],
 					];
 				}
 			}
 		}
+
 		if ( 'php' === $ext ) {
 			// Parse a php-style register_block_type() call.
 			// Again this assumes literal strings, and only parses the name and title.
 			$contents = file_get_contents( $filename );
-			if ( $contents && preg_match_all( "#register_block_type\s*[(]\s*['\"]([-\w]+/[-\w]+)['\"]#ms", $contents, $matches, PREG_SET_ORDER ) ) {
+
+			// Search out register_block_type() calls.
+			if ( $contents && preg_match_all( "#register_block_type\s*[(]\s*['\"]([-\w]+/[-\w]+)['\"](?!\s*[.])#ms", $contents, $matches, PREG_SET_ORDER ) ) {
 				foreach ( $matches as $match ) {
 					$blocks[] = (object) [
-						'name' => $match[1],
+						'name'  => $match[1],
 						'title' => null,
 					];
 				}
 			}
+
+			// Search out WP_Block_Type() instances.
+			if ( $contents && preg_match_all( "#new\s+WP_Block_Type\s*[(]\s*['\"]([-\w]+\/[-\w]+)['\"](?!\s*[.])(\s*,[^;]{0,500}['\"]title['\"]\s*=>\s*['\"]([^'\"]+)['\"](?!\s*[.]))?#ms", $contents, $matches, PREG_SET_ORDER ) ) {
+				foreach ( $matches as $match ) {
+					$blocks[] = (object) [
+						'name'  => $match[1],
+						'title' => $match[3] ?? null,
+					];
+				}
+			}
+
 		}
+
 		if ( 'block.json' === basename( $filename ) ) {
 			// A block.json file should have everything we want.
 			$validator = new Block_JSON\Validator();
@@ -1119,20 +1304,48 @@ class Import {
 
 			$has_self_install_step = false;
 			if ( isset( $decoded_file[ 'steps' ] ) ) {
-				foreach ( $decoded_file[ 'steps' ] as $i => $step ) {
-					if ( 'installPlugin' === $step['step']
-						&& $plugin_slug === $step['pluginZipFile']['slug'] ) {
+				foreach ( $decoded_file[ 'steps' ] as &$step ) {
+					// Normalize a "install plugin from url" to a install-by-slug.
+					if (
+						'installPlugin' === $step['step'] &&
+						isset( $step['pluginZipFile']['url'] ) &&
+						preg_match( '!^https?://downloads\.wordpress\.org/plugin/(?P<slug>[a-z0-9-_]+)(\.(?P<version>.+?))?\.zip($|[?])!i', $step['pluginZipFile']['url'], $m )
+					) {
+						$step[ 'pluginZipFile' ] = [
+							'resource' => 'wordpress.org/plugins',
+							'slug'     => $m['slug']
+						];
+					}
+
+					// Normalize a "install theme from url" to a install-by-slug.
+					if (
+						'installTheme' === $step['step'] &&
+						isset( $step['themeZipFile']['url'] ) &&
+						preg_match( '!^https?://downloads\.wordpress\.org/theme/(?P<slug>[a-z0-9-_]+)(\.(?P<version>.+?))?\.zip($|[?])!i', $step['themeZipFile']['url'], $m )
+					) {
+						$step[ 'themeZipFile' ] = [
+							'resource' => 'wordpress.org/themes',
+							'slug'     => $m['slug']
+						];
+					}
+
+					// Check if this is a "install this plugin" step.
+					if (
+						'installPlugin' === $step['step'] &&
+						isset( $step['pluginZipFile']['slug'] ) &&
+						$plugin_slug === $step['pluginZipFile']['slug']
+					) {
 						$has_self_install_step = true;
 
 						if ( true != $step['options']['activate'] ) {
-							$decoded_file[ 'steps' ][ $i ][ 'options' ][ 'activate' ] = true;
+							$step[ 'options' ][ 'activate' ] = true;
 						}
 					}
 				}
 			}
 
 			// Akismet is a special case because the plugin is bundled with WordPress.
-			if ( !$has_self_install_step && 'akismet' !== $plugin_slug ) {
+			if ( ! $has_self_install_step && 'akismet' !== $plugin_slug ) {
 				$decoded_file['steps'][] = array(
 					'step' => 'installPlugin',
 					'pluginZipFile' => array(
@@ -1144,7 +1357,6 @@ class Import {
 					)
 				);
 			}
-
 
 			$contents = json_encode( $decoded_file ); // Re-encode to minimize whitespace
 		}
