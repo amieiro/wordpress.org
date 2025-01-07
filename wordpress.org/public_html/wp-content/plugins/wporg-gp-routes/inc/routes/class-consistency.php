@@ -88,11 +88,12 @@ class Consistency extends GP_Route {
 
 		$project_where = '';
 		if ( $args['project'] ) {
-			$project = GP::$project->get( $args['project'] );
+			$project       = GP::$project->get( $args['project'] );
 			$project_where = $wpdb->prepare( 'AND p.path LIKE %s', $wpdb->esc_like( $project->path ) . '/%' );
 		}
 
-		$results = $wpdb->get_results( "
+		$results = $wpdb->get_results(
+			"
 			SELECT
 				p.name AS project_name,
 				p.id AS project_id,
@@ -121,14 +122,15 @@ class Consistency extends GP_Route {
 				AND ts.locale = {$locale} AND ts.slug = {$set_slug}
 				{$project_where}
 			LIMIT 0, 500
-		" );
+		"
+		);
 
 		if ( ! $results ) {
-			return [];
+			return array();
 		}
 
 		// Group by translation and project path. Done in PHP because it's faster as in MySQL.
-		usort( $results, [ $this, '_sort_callback' ] );
+		usort( $results, array( $this, '_sort_callback' ) );
 
 		return $results;
 	}
@@ -154,7 +156,7 @@ class Consistency extends GP_Route {
 		$new_request['set']                   = $_POST['set'] ?? '';
 		$new_request['search_case_sensitive'] = $_POST['search_case_sensitive'] ?? false;
 		$new_request['project']               = $_POST['project'] ?? '';
-		$slack_message                       = '';
+		$slack_message                        = '';
 		$updated_translation_count            = 0;
 		$modified_elements                    = array();
 
@@ -174,7 +176,7 @@ class Consistency extends GP_Route {
 
 			foreach ( $consistency_data['results'] as $result ) {
 				$exception = '';
-				if ( 'wporg-bulk-update-do-not-update' == $_POST['translation'][$result->translation] ) {
+				if ( 'wporg-bulk-update-do-not-update' == $_POST['translation'][ $result->translation ] ) {
 					continue;
 				}
 				if ( false !== stripos( strtolower( 'Plugin Name of the plugin' ), strtolower( $result->original_comment ) ) ) {
@@ -194,7 +196,7 @@ class Consistency extends GP_Route {
 				// Get the translation used to overwrite the current.
 				$translation_selected = null;
 				foreach ( $consistency_data['results'] as $item ) {
-					if ( $item->translation === stripslashes($_POST['translation'][$result->translation] )) {
+					if ( $item->translation === stripslashes( $_POST['translation'][ $result->translation ] ) ) {
 						$translation_selected = GP::$translation->get( $item->translation_id );
 						break;
 					}
@@ -226,30 +228,42 @@ class Consistency extends GP_Route {
 				} else {
 					$new_translation = $current_translation;
 				}
-//				$new_translation = $current_translation;
+
 				$modified_elements[] = array(
-					'exception' => $exception,
-					'old_translation' => $current_translation->translation_0,
-					'new_translation' => $translation_selected->translation_0,
+					'exception'          => $exception,
+					'old_translation'    => $current_translation->translation_0,
+					'new_translation'    => $translation_selected->translation_0,
 					'new_translation_id' => $new_translation->id,
-					'project_path' => $result->project_path,
-					'original_id' => $result->original_id,
+					'project_path'       => $result->project_path,
+					'original_id'        => $result->original_id,
 				);
 			}
 
-			$notice_message                = sprintf(
+			$notice_message = sprintf(
 				/* translators: %s: number of translations updated */
-				esc_html(_n( '%s translation updated.', '%s translations updated.', $updated_translation_count, 'wporg' ) ),
+				esc_html( _n( '%s translation updated.', '%s translations updated.', $updated_translation_count, 'wporg' ) ),
 				number_format_i18n( $updated_translation_count )
 			);
 			$new_request['notice_message'] = $notice_message;
-			$slack_message                = $notice_message;
+			$slack_message                 = $notice_message;
 			if ( $modified_elements ) {
 				$new_request['notice_message'] .= '<ul>';
-				$slack_message                .= "\n\n";
+				$processed_old_translations     = array();
+				$total_elements                 = count( $modified_elements );
 
-				foreach ( $modified_elements as $modified_element ) {
-					$url = sprintf( "https://translate.wordpress.org/projects/%s/%s/?filters[status]=either&filters[original_id]=%d&filters[translation_id]=%d",
+				foreach ( $modified_elements as $index => $modified_element ) {
+					$old_translation = $modified_element['old_translation'];
+					if ( ! isset( $processed_old_translations[ $old_translation ] ) ) {
+						$processed_old_translations[ $old_translation ] = true;
+						$slack_message                                 .= sprintf(
+							"\n- Old: %s → New: %s. ",
+							esc_html( $old_translation ),
+							esc_html( $modified_element['new_translation'] )
+						);
+					}
+
+					$url = sprintf(
+						'https://translate.wordpress.org/projects/%s/%s/?filters[status]=either&filters[original_id]=%d&filters[translation_id]=%d',
 						$modified_element['project_path'],
 						$new_request['set'],
 						$modified_element['original_id'],
@@ -257,13 +271,7 @@ class Consistency extends GP_Route {
 					);
 					if ( '' != $modified_element['exception'] ) {
 						$new_request['notice_message'] .= sprintf(
-							"<li>%s Please, update this translation manually at <a href=\"%s\" target=\"_blank\">%s</a>.</li>",
-							esc_html( $modified_element['exception'] ),
-							esc_url( $url ),
-							esc_url( $url )
-						);
-						$slack_message 			  .= sprintf(
-							"- %s. Please, update this translation manually at <%s|%s>.\n\n",
+							'<li>%s Please, update this translation manually at <a href="%s" target="_blank">%s</a>.</li>',
 							esc_html( $modified_element['exception'] ),
 							esc_url( $url ),
 							esc_url( $url )
@@ -277,19 +285,20 @@ class Consistency extends GP_Route {
 						esc_url( $url ),
 						esc_url( $url )
 					);
-					$slack_message 			  .= sprintf(
-						"- Old: %s → New: %s → <%s|See string>\n",
-						esc_html( $modified_element['old_translation'] ),
-						esc_html( $modified_element['new_translation'] ),
-						esc_url_raw( $url )
+					$is_last_occurrence             = ( $index === $total_elements - 1 ) || ( $modified_elements[ $index + 1 ]['old_translation'] !== $old_translation );
+					$link_text                      = $is_last_occurrence ? 'Link.' : 'Link,';
+					$slack_message                 .= sprintf(
+						'<%s|%s> ',
+						esc_url_raw( $url ),
+						$link_text
 					);
 				}
 
 				$new_request['notice_message'] .= '</ul>';
 			}
-			if ( $updated_translation_count > 0 ) {
+			 if ( $updated_translation_count > 0 ) {
 				$this->notify_to_slack( $slack_message, $current_user, $new_request['set'] );
-			}
+			 }
 		}
 
 		$this->get_search_form( $new_request );
@@ -305,16 +314,19 @@ class Consistency extends GP_Route {
 	 */
 	private function is_the_user_a_gte( $user, $set ) {
 		$locale_slug = explode( '/', $set )[0];
-		$locale = GP_Locales::by_slug( $locale_slug );
+		$locale      = GP_Locales::by_slug( $locale_slug );
+		if ( ! $locale ) {
+			return false;
+		}
 
 		$result  = get_sites(
-			[
+			array(
 				'locale'     => $locale->wp_locale,
 				'network_id' => WPORG_GLOBAL_NETWORK_ID,
 				'path'       => '/',
 				'fields'     => 'ids',
 				'number'     => '1',
-			]
+			)
 		);
 		$site_id = array_shift( $result );
 		if ( ! $site_id ) {
@@ -322,11 +334,11 @@ class Consistency extends GP_Route {
 		}
 
 		$users = get_users(
-			[
+			array(
 				'blog_id'     => $site_id,
 				'role'        => 'general_translation_editor',
 				'count_total' => false,
-			]
+			)
 		);
 
 		foreach ( $users as $gte_user ) {
@@ -348,10 +360,10 @@ class Consistency extends GP_Route {
 	private function prepare_consistency_data( array $request ): array {
 		$sets = $this->get_translation_sets();
 
-		$search                = $set = $project = '';
-		$search_case_sensitive = false;
-		$notice_message        = '';
-		$error_message 	       = '';
+		$search                         = $set = $project = '';
+		$search_case_sensitive          = false;
+		$notice_message                 = '';
+		$error_message                  = '';
 		$is_current_user_gte_for_locale = false;
 
 		if ( isset( $request['search'] ) && strlen( $request['search'] ) ) {
@@ -373,7 +385,7 @@ class Consistency extends GP_Route {
 			$error_message = $request['error_message'];
 		}
 
-		$is_current_user_gte_for_locale = $this->is_the_user_a_gte( wp_get_current_user(), $request['set'] );
+		$is_current_user_gte_for_locale = $this->is_the_user_a_gte( wp_get_current_user(), $request['set'] ?? '' );
 
 		if ( ! empty( $request['search_case_sensitive'] ) ) {
 			$search_case_sensitive = true;
@@ -389,20 +401,22 @@ class Consistency extends GP_Route {
 
 		if ( $set ) {
 			list( $locale, $set_slug ) = explode( '/', $set );
-			$locale_is_rtl = 'rtl' === GP_Locales::by_slug( $locale )->text_direction;
+			$locale_is_rtl             = 'rtl' === GP_Locales::by_slug( $locale )->text_direction;
 		}
 
 		$results          = array();
 		$performed_search = false;
 		if ( strlen( $search ) && $locale && $set_slug ) {
 			$performed_search = true;
-			$results          = $this->query( [
-				'search'         => $search,
-				'locale'         => $locale,
-				'set_slug'       => $set_slug,
-				'case_sensitive' => $search_case_sensitive,
-				'project'        => $project,
-			] );
+			$results          = $this->query(
+				array(
+					'search'         => $search,
+					'locale'         => $locale,
+					'set_slug'       => $set_slug,
+					'case_sensitive' => $search_case_sensitive,
+					'project'        => $project,
+				)
+			);
 
 			$translations               = wp_list_pluck( $results, 'translation', 'translation_id' );
 			$translations_unique        = array_values( array_unique( $translations ) );
@@ -420,19 +434,14 @@ class Consistency extends GP_Route {
 	/**
 	 * Notify the bulk update to Matrix.
 	 *
-	 * @param string $message
+	 * @param string   $message
 	 * @param \WP_User $user
-	 * @param string $set
+	 * @param string   $set
 	 *
 	 * @return void
 	 */
 	private function notify_to_slack( string $message, \WP_User $user, string $set ) {
 		$message = "<https://profiles.wordpress.org/{$user->user_nicename}|$user->display_name> has made some bulk updates in *{$set}*. " . $message;
-
-		if ( defined( 'WPORG_SANDBOXED' ) && WPORG_SANDBOXED ) {
-			slack_dm( $message, '@amieiro' );
-		} else {
-			slack_dm( $message, $this->polyglots_logs_channel_id );
-		}
+		slack_dm( $message, $this->polyglots_logs_channel_id );
 	}
 }
